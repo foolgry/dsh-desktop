@@ -93,7 +93,7 @@ jobs:
 
       - name: Build installer (no publish — release is assembled below to avoid
           parallel-build race on the same tag)
-        run: pnpm exec electron-builder ${{ matrix.builder-flag }}
+        run: pnpm exec electron-builder ${{ matrix.builder-flag }} --publish never
         env:
           # Unsigned on purpose (no Apple Developer / code-signing budget):
           # installers show the platform's unknown-developer warning.
