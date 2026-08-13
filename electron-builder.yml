@@ -1,0 +1,38 @@
+appId: com.foolgry.dshdesktop
+productName: DSH Desktop
+copyright: MIT
+
+directories:
+  output: dist-installer
+
+files:
+  - dist/**
+  - node_modules/**
+  - package.json
+
+# The dsh CLI entry is spawned as a child process; asar archives are not
+# executable paths, so the runtime tree must stay on disk.
+asarUnpack:
+  - node_modules/**
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip # required by electron-updater on macOS
+  artifactName: ${productName}-${version}-mac-arm64.${ext}
+
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-win-x64-setup.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: DSH Desktop
+
+publish:
+  provider: github
+  owner: foolgry
+  repo: dsh-desktop
