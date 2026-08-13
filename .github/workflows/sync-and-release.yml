@@ -1,0 +1,113 @@
+name: sync-and-release
+
+# Polls npm for a new @deepseek-ai/dsh release, and when one appears (or a
+# forced manual run asks for it) bumps the pinned dependency, tags a new
+# desktop version, and publishes signed-less macOS/Windows installers to
+# GitHub Releases. One workflow by design: a tag pushed with GITHUB_TOKEN
+# would not trigger a second workflow.
+
+on:
+  schedule:
+    # 09:00 / 13:00 / 17:00 Beijing time (UTC+8), three builds a day.
+    - cron: '0 1,5,9 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild even when upstream is unchanged'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-and-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      version: ${{ steps.sync.outputs.version }}
+      upstream_version: ${{ steps.sync.outputs.upstream_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - id: sync
+        run: |
+          args=()
+          if [ "${{ inputs.force }}" = "true" ]; then args+=(--force); fi
+          node scripts/sync-upstream.mjs "${args[@]}"
+
+      - name: Refresh lockfile for the new upstream version
+        if: steps.sync.outputs.changed == 'true'
+        run: pnpm install --lockfile-only
+
+      - name: Commit, tag, and push the bump
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json pnpm-lock.yaml
+          git commit -m "chore(sync): @deepseek-ai/dsh ${{ steps.sync.outputs.upstream_version }}"
+          git tag "v${{ steps.sync.outputs.version }}"
+          git push origin HEAD:master --tags
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            builder-flag: --mac
+          - os: windows-latest
+            builder-flag: --win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/v${{ needs.sync.outputs.version }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - name: Build and publish installer
+        run: pnpm exec electron-builder ${{ matrix.builder-flag }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unsigned on purpose (no Apple Developer / code-signing budget):
+          # installers show the platform's unknown-developer warning.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+  notes:
+    needs: [sync, build]
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Annotate the release with its upstream base
+        run: |
+          gh release edit "v${{ needs.sync.outputs.version }}" \
+            --title "v${{ needs.sync.outputs.version }}" \
+            --notes "Built on [@deepseek-ai/dsh ${{ needs.sync.outputs.upstream_version }}](https://www.npmjs.com/package/@deepseek-ai/dsh/v/${{ needs.sync.outputs.upstream_version }}). Unsigned build: macOS asks to confirm via right-click → Open; Windows shows a SmartScreen prompt → More info → Run anyway."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
