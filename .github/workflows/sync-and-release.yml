@@ -91,23 +91,36 @@ jobs:
 
       - run: pnpm run build
 
-      - name: Build and publish installer
-        run: pnpm exec electron-builder ${{ matrix.builder-flag }} --publish always
+      - name: Build installer (no publish — release is assembled below to avoid
+          parallel-build race on the same tag)
+        run: pnpm exec electron-builder ${{ matrix.builder-flag }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Unsigned on purpose (no Apple Developer / code-signing budget):
           # installers show the platform's unknown-developer warning.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-  notes:
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: dist-installer/*
+          if-no-files-found: error
+
+  release:
     needs: [sync, build]
     if: needs.sync.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Annotate the release with its upstream base
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create published release with all installers
         run: |
-          gh release edit "v${{ needs.sync.outputs.version }}" \
+          gh release create "v${{ needs.sync.outputs.version }}" \
+            --repo foolgry/dsh-desktop \
             --title "v${{ needs.sync.outputs.version }}" \
-            --notes "Built on [@deepseek-ai/dsh ${{ needs.sync.outputs.upstream_version }}](https://www.npmjs.com/package/@deepseek-ai/dsh/v/${{ needs.sync.outputs.upstream_version }}). Unsigned build: macOS asks to confirm via right-click → Open; Windows shows a SmartScreen prompt → More info → Run anyway."
+            --notes "Built on [@deepseek-ai/dsh ${{ needs.sync.outputs.upstream_version }}](https://www.npmjs.com/package/@deepseek-ai/dsh/v/${{ needs.sync.outputs.upstream_version }}). Unsigned build: macOS asks to confirm via right-click → Open; Windows shows a SmartScreen prompt → More info → Run anyway." \
+            artifacts/*
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
