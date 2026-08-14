@@ -122,14 +122,19 @@ function startDsh(port: number): ChildProcess {
   appendFileSync(log, `\n=== dsh web starting on port ${port} at ${new Date().toISOString()} ===\n`)
   // --expose-internals is required by cordis-plugin-hmr's HMR service, which
   // ships in the base profile and reads Node internals unavailable by default.
-  const args = ['--expose-internals', dshBin(), 'web', '--port', String(port)]
+  const args = ['--expose-internals', dshBin(), 'web']
   // win32: the native folder dialog's koffi.node crashes under Electron's ABI
-  // (issue #1), so overlay the pure-JS browse picker instead.
+  // (issue #1), so overlay the pure-JS browse picker instead. --patch must
+  // come BEFORE --port: the web subcommand uses enablePositionalOptions() with
+  // a greedy [args...], so once the unknown option --port starts being
+  // collected as a positional, any later --patch is no longer parsed
+  // (issue #2).
   const pickerPatch = ensurePickerFallbackPatch()
   if (pickerPatch) {
     args.push('--patch', pickerPatch)
     appendFileSync(log, `=== win32: using browse directory picker (native koffi crashes under Electron ABI; issue #1) ===\n`)
   }
+  args.push('--port', String(port))
   const child = spawn(process.execPath, args, {
     env: {
       ...process.env,
