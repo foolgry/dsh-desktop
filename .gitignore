@@ -6,3 +6,7 @@ dist-installer/
 
 # ZCode agent local state (session plans, etc.)
 .zcode/
+
+# VitePress build output
+docs/.vitepress/dist/
+docs/.vitepress/cache/

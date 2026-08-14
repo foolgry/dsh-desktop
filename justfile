@@ -26,3 +26,11 @@ dist-win:
 # Check npm for a new @deepseek-ai/dsh release and bump this package
 sync:
     node scripts/sync-upstream.mjs
+
+# Start the docs dev server (VitePress) at http://localhost:5173
+docs:
+    pnpm docs:dev
+
+# Build the docs site into docs/.vitepress/dist
+docs-build:
+    pnpm docs:build

@@ -17,15 +17,18 @@
     "dev": "tsc && electron .",
     "pack": "tsc && electron-builder",
     "dist:mac": "tsc && electron-builder --mac",
-    "dist:win": "tsc && electron-builder --win"
+    "dist:win": "tsc && electron-builder --win",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "dsh": {
     "upstream": "@deepseek-ai/dsh",
     "upstreamVersion": "0.1.0-rc.6"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.0-rc.6",
     "@deepseek-ai/cordis-plugin-group": "^1.0.1",
+    "@deepseek-ai/dsh": "0.1.0-rc.6",
     "@deepseek-ai/dsh-anonymous-user-id": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-bash-local": "^0.1.0-rc.6",
@@ -51,6 +54,8 @@
     "electron": "^43.4.0",
     "electron-builder": "^26.0.12",
     "semver": "^7.7.1",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitepress": "^1.6.4",
+    "vue": "^3.5.41"
   }
 }
