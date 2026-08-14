@@ -93,6 +93,8 @@ dist-installer/             # electron-builder 输出（gitignore）
 2. **build**（macos-14 / windows-latest 并行）：checkout 对应 tag → `electron-builder --publish never` → 上传 artifact。
 3. **release**（ubuntu）：汇总双平台产物，`gh release create` 一次性发布（避免并行构建竞争同一 release）。
 
+**Release 说明（notes）约定**：release 阶段用 heredoc 生成 `notes.md` 再 `--notes-file` 发布，**必须中英双语**，且 macOS 部分必须包含「已损坏」的修复命令 `` xattr -cr "/Applications/DSH Desktop.app" ``，Windows 部分说明 SmartScreen → 更多信息 → 仍要运行。修改 notes 文案时不要删掉这两条用户指引。
+
 ## 修改时的检查清单
 
 - 改了 `src/main.ts` → `just build`（tsc strict 通过），最好 `just dev` 实跑一次看 UI 能起来。
