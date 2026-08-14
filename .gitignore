@@ -3,3 +3,6 @@ dist/
 dist-installer/
 *.log
 .DS_Store
+
+# ZCode agent local state (session plans, etc.)
+.zcode/
