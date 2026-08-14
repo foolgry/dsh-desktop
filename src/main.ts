@@ -9,7 +9,7 @@
 import { app, BrowserWindow, dialog, shell } from 'electron'
 import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
@@ -50,6 +50,43 @@ function dshBin(): string {
 }
 
 /**
+ * Overlay that swaps the native OS folder dialog for the in-app file-tree
+ * picker. The native picker (`directory-picker-auto` → `-native` on win32/darwin)
+ * loads `koffi.node`; its prebuilt win32-x64 binary throws a NAPI fatal error
+ * under Electron's embedded Node ABI, so the dialog worker dies before
+ * reporting a result (issue #1). macOS uses `osascript` and Linux uses
+ * `zenity`/`kdialog`, neither of which touches koffi, so this is win32-only.
+ *
+ * Disabling `-auto` and mounting both the browse backend and its UI surface
+ * mirrors exactly what `-auto` does on its own `browse` branch.
+ */
+const BROWSE_PICKER_PATCH = `# Force the in-app file-tree picker (pure node:fs) instead of the native OS
+# dialog. The native picker's koffi.node crashes under Electron's embedded Node
+# ABI on win32 — see https://github.com/foolgry/dsh-desktop/issues/1
+- id: directory-picker
+  disabled: true
+
+- insert:
+    - id: directory-picker-browse
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: directory-picker-browse-client
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+`
+
+/**
+ * On win32, persist the browse-picker overlay into userData and return its
+ * path so it can be passed to `dsh web --patch`. Returns `undefined` on every
+ * other platform, leaving the native picker (and its better UX) intact.
+ * @returns path to the overlay file, or `undefined` when no override is needed
+ */
+function ensurePickerFallbackPatch(): string | undefined {
+  if (process.platform !== 'win32') return undefined
+  const file = join(app.getPath('userData'), 'picker-browse-fallback.yml')
+  writeFileSync(file, BROWSE_PICKER_PATCH, 'utf8')
+  return file
+}
+
+/**
  * Probe one loopback port.
  * @param port - candidate port
  * @returns whether something could bind it right now
@@ -85,7 +122,15 @@ function startDsh(port: number): ChildProcess {
   appendFileSync(log, `\n=== dsh web starting on port ${port} at ${new Date().toISOString()} ===\n`)
   // --expose-internals is required by cordis-plugin-hmr's HMR service, which
   // ships in the base profile and reads Node internals unavailable by default.
-  const child = spawn(process.execPath, ['--expose-internals', dshBin(), 'web', '--port', String(port)], {
+  const args = ['--expose-internals', dshBin(), 'web', '--port', String(port)]
+  // win32: the native folder dialog's koffi.node crashes under Electron's ABI
+  // (issue #1), so overlay the pure-JS browse picker instead.
+  const pickerPatch = ensurePickerFallbackPatch()
+  if (pickerPatch) {
+    args.push('--patch', pickerPatch)
+    appendFileSync(log, `=== win32: using browse directory picker (native koffi crashes under Electron ABI; issue #1) ===\n`)
+  }
+  const child = spawn(process.execPath, args, {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
