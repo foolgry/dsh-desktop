@@ -17,12 +17,14 @@ asarUnpack:
 
 mac:
   category: public.app-category.productivity
+  icon: build/icon.icns
   target:
     - dmg
     - zip # required by electron-updater on macOS
   artifactName: ${productName}-${version}-mac-arm64.${ext}
 
 win:
+  icon: build/icon.ico
   target:
     - nsis
   artifactName: ${productName}-${version}-win-x64-setup.${ext}

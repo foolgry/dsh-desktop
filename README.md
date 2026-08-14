@@ -1,47 +1,73 @@
 # DSH Desktop
 
-Download-and-run desktop build of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). No Node.js, no npm, no terminal required: install the app, open it, paste your DeepSeek API key into the built-in web UI, and start running agent tasks.
+[English](#english) · 简体中文
 
-> Community build, not an official DeepSeek product. The upstream harness is MIT-licensed; this repo is only the Electron shell and release automation.
+DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 Node.js、无需使用 npm、无需打开终端。安装后打开应用，在界面里填入你的 DeepSeek API Key，就能开始让 AI 帮你跑任务（读写文件、执行命令、写代码、自动化操作等）。
 
-## Install
+> ⚠️ **这是社区（非官方）构建**。上游 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 采用 MIT 协议开源，本仓库只是 Electron 桌面外壳和自动打包脚本，不是 DeepSeek 官方产品。DeepSeek 的名称和鲸鱼 Logo 为 DeepSeek 的商标，此处仅用于标识所打包的上游软件。
 
-Grab the latest installer from [Releases](https://github.com/foolgry/dsh-desktop/releases):
+## 下载安装
 
-- **macOS (Apple Silicon)**: `DSH-Desktop-*-mac-arm64.dmg` — unsigned build: right-click the app → *Open* to pass Gatekeeper.
-- **Windows (x64)**: `DSH-Desktop-*-win-x64-setup.exe` — SmartScreen will prompt; choose *More info → Run anyway*.
+到 [Releases](https://github.com/foolgry/dsh-desktop/releases) 页面下载最新版本：
 
-The app checks for updates on start and every 4 hours. On Windows updates install automatically; on macOS (unsigned) you get a prompt with a download link.
+- **macOS（Apple Silicon / M 系列芯片）**：下载 `DSH-Desktop-*-mac-arm64.dmg`
+  - 未签名：首次打开如果提示"无法验证开发者"，**右键点应用 → 打开** 即可通过
+  - 如果提示 **"DSH Desktop 已损坏，无法打开"**：这是因为应用未做 Apple 公证，下载时被系统加了隔离属性。打开**终端**执行一次以下命令，然后即可正常打开：
+    ```sh
+    xattr -cr "/Applications/DSH Desktop.app"
+    ```
+- **Windows（64 位）**：下载 `DSH-Desktop-*-win-x64-setup.exe`
+  - SmartScreen 会提示风险：点 **更多信息 → 仍要运行**
 
-## How it works
+应用启动时会自动检查更新（每 4 小时一次）。Windows 自动安装；macOS（未签名）会弹窗提示并给下载链接。
 
-- The app embeds Electron's own Node.js runtime and the published [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) packages — nothing is installed on your system.
-- On launch it spawns `dsh web` on the first free loopback port starting at **3080** (3081, 3082, … if occupied) and opens the UI in a native window. The server only listens on `127.0.0.1`.
-- App data (profiles, sessions) lives in the OS app-data directory (`dsh-home` under Electron's `userData`), not in your home directory. Logs: `logs/dsh.log` in the same place.
-- The API key is entered in the web UI's own settings, exactly as with `npx @deepseek-ai/dsh web`.
+## 使用
 
-## Release automation
+1. 安装后打开 **DSH Desktop**
+2. 在界面的设置里填入你的 [DeepSeek API Key](https://platform.deepseek.com/)（和网页版操作一样）
+3. 开始对话，让 AI 帮你完成任务
 
-[`.github/workflows/sync-and-release.yml`](.github/workflows/sync-and-release.yml) runs at **09:00 / 13:00 / 17:00 Beijing time** (and on manual dispatch):
+你的数据（对话、配置、会话）存在系统应用数据目录，不会污染你的用户目录。日志在同目录的 `logs/dsh.log`。
 
-1. Polls npm for the latest `@deepseek-ai/dsh`; exits quietly when unchanged.
-2. On a new upstream release: bumps the pinned version, tags `v<desktop-version>`, and pushes.
-3. Builds macOS (dmg + zip) and Windows (nsis) installers and publishes them to GitHub Releases.
+## 它是怎么工作的
 
-Desktop versions track upstream: `0.1.0-rc.6.1` means "upstream `0.1.0-rc.6`, desktop build 1".
+- 应用内置了 Electron 自带的 Node.js 运行时和官方发布的 [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) 包，**不会在你的系统里安装任何东西**
+- 启动时在本机回环地址起一个 `dsh web` 服务（默认 3080 端口，被占用则自动用 3081、3082…），只监听 `127.0.0.1`，不对外暴露
+- 用原生窗口加载这个界面，体验和桌面软件一致
 
-## Development
+## 自动同步与打包
 
-Requires Node.js `^22.19 || >=24`, [pnpm](https://pnpm.io), and [just](https://just.systems).
+[sync-and-release.yml](.github/workflows/sync-and-release.yml) 在**北京时间每天 9:00 / 13:00 / 17:00** 自动运行：
+
+1. 检查 npm 上 `@deepseek-ai/dsh` 是否有新版本；没有则跳过
+2. 有新版本就更新依赖、打 tag、构建 macOS（dmg + zip）和 Windows（nsis）安装包，发布到 Releases
+
+桌面版版本号跟随上游：`0.1.0-rc.6.6` 表示"基于上游 `0.1.0-rc.6` 的第 6 个桌面构建"。
+
+## 本地开发
+
+需要 Node.js `^22.19 || >=24`、[pnpm](https://pnpm.io)、[just](https://just.systems)。
 
 ```sh
-just install   # pnpm install
-just dev       # compile main process and launch the app from source
-just sync      # check npm for a new upstream release and bump
-just dist-mac  # build the macOS installer into dist-installer/
-just dist-win  # build the Windows installer (on Windows/CI)
+just install    # 安装依赖
+just dev        # 编译并以源码方式启动应用
+just sync       # 检查上游新版本并更新
+just dist-mac   # 构建 macOS 安装包到 dist-installer/
+just dist-win   # 构建 Windows 安装包（在 Windows/CI 上）
 ```
 
-## License
+## 许可证
 
-MIT (shell code). DeepSeek Harness itself is MIT © DeepSeek; see upstream `THIRD_PARTY_NOTICES.md` for bundled dependencies.
+桌面外壳代码：MIT。DeepSeek Harness 本体为 MIT © DeepSeek；打包的第三方依赖见上游 `THIRD_PARTY_NOTICES.md`。
+
+---
+
+## English
+
+Download-and-run desktop build of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). No Node.js, no npm, no terminal: install the app, open it, paste your DeepSeek API key into the built-in web UI, and start running agent tasks.
+
+**Install** from [Releases](https://github.com/foolgry/dsh-desktop/releases) — macOS arm64 (`*.dmg`, unsigned: right-click → *Open*; if macOS says the app **"is damaged and can't be opened"**, run `xattr -cr "/Applications/DSH Desktop.app"` once in Terminal to clear the quarantine attribute) and Windows x64 (`*-setup.exe`, SmartScreen → *More info → Run anyway*). In-app auto-updates via GitHub Releases.
+
+A scheduled workflow polls npm for new `@deepseek-ai/dsh` releases 3×/day (09:00 / 13:00 / 17:00 Beijing) and rebuilds + republishes installers automatically. Desktop versions track upstream (e.g. `0.1.0-rc.6.6` = upstream `0.1.0-rc.6`, build 6).
+
+> Community (unofficial) build. DeepSeek name and logo are trademarks of DeepSeek, used here only to identify the packaged upstream software. Shell code: MIT.
