@@ -13,6 +13,11 @@ export default defineConfig({
   description:
     'Download-and-run desktop build of DeepSeek Harness. No Node.js, npm, or terminal required.',
 
+  // GitHub Pages serves this as a project site under /dsh-desktop/, so all
+  // asset and router URLs must be prefixed with that subpath. Without this the
+  // page renders as unstyled HTML (CSS/JS 404 at the domain root).
+  base: '/dsh-desktop/',
+
   head: [['link', { rel: 'icon', type: 'image/png', href: '/icon.png' }]],
 
   locales: {
