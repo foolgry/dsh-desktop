@@ -6,10 +6,10 @@
  * @module dsh-desktop/main
  */
 
-import { app, BrowserWindow, dialog, shell } from 'electron'
+import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, shell } from 'electron'
 import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
@@ -22,6 +22,15 @@ const LAST_PORT = 3099
 const READY_TIMEOUT_MS = 60_000
 /** Release page used as the manual-download fallback when auto-update fails. */
 const RELEASES_URL = 'https://github.com/foolgry/dsh-desktop/releases'
+
+/**
+ * 36×36 tray icon (whale with padding), embedded as a data URL
+ * so the packaged app needs no extra resource files — electron-builder only
+ * ships `dist/` and `node_modules/`. Regenerate from `build/icon.png` with:
+ * `magick build/icon.png -trim +repage -resize 30x30 -gravity center -background none -extent 36x36`
+ */
+const TRAY_ICON_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAMAAADW3miqAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAHvUExURQAAAE1r/kJn/1Bt/01r/01q/U1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/k1r/gAAAIw+fZsAAACjdFJOUwAAAAAAABtQemMJjGAFMGaJmJR+j9H2bgQSvyICJCyh6+EeH9hpAw4XattD/BkW1fJlisr65i/awfSeC6rQMznk11LzMk/f/cg/qc7W7dNFpPuiWD0PMWi39eq74+ziOPnpKE3ExUY3wOgp95awNibLEHgIiElezL0Kn1OQSPgVQu6zDEvwZKhzE4fndBG173YN1Lk1JbbJ4CedizSlgi0HxoXQznh8AAAAAWJLR0QAiAUdSAAAAAd0SU1FB+oIDgYlI+W9c5EAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDgtMTRUMDE6MDc6MTQrMDA6MDAj9EBCAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTA4LTE0VDAxOjA3OjE0KzAwOjAwUqn4/gAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wOC0xNFQwNjozNzozNSswMDowMAV/tbEAAAHaSURBVDjLY2AYBWDACAds7BycXECamwdIgCWQ1PDy8QsICgmLiIqJiUswMkqKSkmDNcnIItTIySsshgJFJSBfWXGxiqoak7qGphZckbbKYjjQEdRlZNTTX7zYwNDIWMXEFKbIzHwxMrAwY1STB9KWII4VVJG1zWJUYGvHaO8AYTryQRU5OS9GV+XC6OoGpN09PGG+81rs4O3ji6LKz18tYHFgULAGPAgUFUJC9cLCIyIhCqKiYxYvjg2IW2wZz4gIp4TEJBCPKzkFrCg1LT0DzMjMQgQlQ2C2PyS4NXICgXLmuXn5PiBFBYUINQy+i4ugUVBcorN4sVhiKWOZCVCRIDOSovLFFdZQVZVVICOi08SB7jOpRrKNoWaxZS2Yz8LIqFQAUlUHsragHllRQ+PipmagANhdLa3QUAhsY2RFSijF7YsDO0AKijuB0d4FVeTVjGwQA2N69+LGMqAiT+OeXsbOPkhASKOoAVqjmb24f8JERt1JiydPYZzqAVQTySPDiGoSIy+H2GKdaWUt0xcvnsHDNXMyKCRtGtCNkuAHxrp7Asie7AyRWVJ+sc79s2VQFIH8NWduIyx2Tefp1c/Py7JGNQmsakGDkGhrYHbmwkVh8GxBn2w4FAAA8TPI0GQOSlEAAAAASUVORK5CYII='
 
 /** Directory holding dsh's own state (profiles, sessions), inside userData. */
 function dshHome(): string {
@@ -175,6 +184,18 @@ async function waitReady(port: number, child: ChildProcess): Promise<void> {
 }
 
 /**
+ * Whale icon from `build/` for dev mode (`electron .` uses Electron's default
+ * bundle icon, which leaks into the dock, window chrome, and dialogs).
+ * Returns `undefined` when packaged — electron-builder bakes the real icon
+ * into the bundle/exe there.
+ */
+function devIcon(): Electron.NativeImage | undefined {
+  if (app.isPackaged) return undefined
+  const file = join(app.getAppPath(), 'build', 'icon.png')
+  return existsSync(file) ? nativeImage.createFromPath(file) : undefined
+}
+
+/**
  * Create the single application window pointed at the local server.
  * @param port - port the server bound
  */
@@ -186,6 +207,17 @@ function createWindow(port: number): BrowserWindow {
     minHeight: 600,
     title: 'DSH Desktop',
     autoHideMenuBar: true,
+    // Used by window chrome on win/linux; ignored on macOS (dock icon is set
+    // separately at startup).
+    icon: devIcon(),
+  })
+  // Closing the window hides it to the tray instead of quitting, so long
+  // agent tasks keep running in the background (issue #3). Real exit only
+  // happens via the tray menu / Cmd+Q, which flips `quitting` first.
+  win.on('close', (event) => {
+    if (quitting) return
+    event.preventDefault()
+    win.hide()
   })
   // The UI is a local agent console; anything off-origin is an external link
   // and belongs in the user's real browser.
@@ -201,6 +233,55 @@ function createWindow(port: number): BrowserWindow {
   })
   void win.loadURL(`http://127.0.0.1:${port}/`)
   return win
+}
+
+/**
+ * Show the main window again (tray click, dock click, second instance).
+ * Recreates it if it was somehow destroyed.
+ * @param port - port the server bound
+ */
+function showWindow(port: number): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = createWindow(port)
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+/**
+ * Create the system-tray icon with a show/quit menu. The tray owns the app
+ * lifecycle once the window is hidden: left-click restores the window,
+ * "Quit" is the only path that tears down the dsh child.
+ * @param port - port the server bound
+ */
+function createTray(port: number): void {
+  // Declare the 36px PNG as a @2x representation so its logical size is
+  // 18pt — status-item images are laid out in points, and a 1x image would
+  // be clipped to the menu-bar height and look oversized.
+  const icon = nativeImage.createEmpty()
+  icon.addRepresentation({ scaleFactor: 2, dataURL: TRAY_ICON_DATA_URL })
+  // macOS menu bar: render as an adaptive monochrome silhouette so the whale
+  // stays visible on both light and dark menu bars. Windows keeps the color
+  // icon in the notification area.
+  if (process.platform === 'darwin') icon.setTemplateImage(true)
+  tray = new Tray(icon)
+  tray.setToolTip('DSH Desktop')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Show DSH Desktop', click: () => showWindow(port) },
+      { type: 'separator' },
+      {
+        label: 'Quit DSH Desktop',
+        click: () => {
+          quitting = true
+          app.quit()
+        },
+      },
+    ]),
+  )
+  tray.on('click', () => showWindow(port))
 }
 
 /**
@@ -237,12 +318,20 @@ function setupAutoUpdate(): void {
 }
 
 let dshChild: ChildProcess | undefined
+let mainWindow: BrowserWindow | undefined
+let tray: Tray | undefined
+/** Port the dsh server bound; kept so hidden-window restores can recreate the window. */
+let serverPort = 0
+/** Set only by an explicit quit (tray menu, Cmd+Q); guards the close-to-tray interception. */
+let quitting = false
 
 async function boot(): Promise<void> {
   const port = await pickPort()
+  serverPort = port
   dshChild = startDsh(port)
   await waitReady(port, dshChild)
-  createWindow(port)
+  mainWindow = createWindow(port)
+  createTray(port)
 }
 
 const gotLock = app.requestSingleInstanceLock()
@@ -250,14 +339,19 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    const [win] = BrowserWindow.getAllWindows()
+    // Re-launching the app while it lives in the tray brings the window back.
+    const win = BrowserWindow.getAllWindows()[0]
     if (win) {
       if (win.isMinimized()) win.restore()
+      win.show()
       win.focus()
     }
   })
 
   app.whenReady().then(async () => {
+    // Dev mode only: replace Electron's default dock icon with the whale.
+    const icon = devIcon()
+    if (icon && process.platform === 'darwin') app.dock?.setIcon(icon)
     setupAutoUpdate()
     try {
       await boot()
@@ -270,8 +364,20 @@ if (!gotLock) {
     }
   })
 
-  app.on('window-all-closed', () => app.quit())
+  // Explicit quit paths (tray "Quit", Cmd+Q, boot-failure quit) flip this so
+  // the window's close handler lets the window actually close.
+  app.on('before-quit', () => {
+    quitting = true
+  })
+  // The app lives in the tray once the window is closed; never quit just
+  // because no window is open (issue #3).
+  app.on('window-all-closed', () => {})
+  // macOS dock click while running in the tray reopens the window.
+  app.on('activate', () => {
+    if (serverPort && !mainWindow?.isVisible()) showWindow(serverPort)
+  })
   app.on('will-quit', () => {
+    tray?.destroy()
     if (dshChild && dshChild.exitCode === null) dshChild.kill()
   })
 }

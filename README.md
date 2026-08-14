@@ -34,6 +34,7 @@ Your data (conversations, configuration, sessions) is stored in the system appli
 - The app bundles the Node.js runtime that ships with Electron and the officially published [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) package — **it installs nothing on your system**
 - On startup it launches a `dsh web` service on the loopback address (port 3080 by default; if occupied, it automatically tries 3081, 3082…), listening only on `127.0.0.1` and never exposed externally
 - A native window loads this interface, giving an experience consistent with a desktop app
+- **Closing the window does not quit the app**: the × button minimizes to the system tray and running tasks continue in the background; click the tray icon (or "Show DSH Desktop" in its menu) to reopen the window, and use the tray menu's "Quit" (or Cmd+Q on macOS) to exit completely
 
 ## Automatic sync and packaging
 

@@ -59,12 +59,13 @@ dist-installer/             # electron-builder 输出（gitignore）
    - `DSH_TELEMETRY_DISABLED=1`
    - `--expose-internals` 是 cordis-plugin-hmr 的 HMR 服务所需
 3. **`waitReady()`** — 每 500ms 轮询 `http://127.0.0.1:PORT/`，最多等 60s；期间若子进程提前退出则直接报错。
-4. **`createWindow()`** — 单个 BrowserWindow 加载本地 UI；导航守卫把任何非 `127.0.0.1` 的跳转交给系统浏览器。
-5. **`setupAutoUpdate()`** — 仅在打包后运行；error 时弹窗指向 Releases 页（macOS 未签名无法自动应用）。
+4. **`createWindow()`** — 单个 BrowserWindow 加载本地 UI；导航守卫把任何非 `127.0.0.1` 的跳转交给系统浏览器。**点 × 不退出**：`close` 事件被拦截改为隐藏窗口，真实退出只有托盘菜单「Quit」/ Cmd+Q（`before-quit` 置 `quitting=true` 放行 close），`window-all-closed` 是空操作（issue #3 托盘驻留）。
+5. **`createTray()`** — 系统托盘图标（36px PNG 以 data URL 内嵌在 `main.ts`，因为 electron-builder 只打包 `dist/` 和 `node_modules/`；改图标需按 `TRAY_ICON_DATA_URL` 注释里的 magick 命令重新生成 base64，**不要手贴长 base64，容易丢字符导致图标空白**）。图标以 `addRepresentation({scaleFactor: 2})` 声明（36px = 18pt 逻辑尺寸），直接 `createFromDataURL` 的 1x 大图在 macOS 菜单栏会被裁剪显示为超大。macOS 上用 `setTemplateImage(true)` 渲染为自适应菜单栏明暗的单色剪影，Windows 保留彩色。左键/菜单「Show」恢复窗口，「Quit」才是真正退出，`will-quit` 里 kill dsh 子进程。
+6. **`setupAutoUpdate()`** — 仅在打包后运行；error 时弹窗指向 Releases 页（macOS 未签名无法自动应用）。
 
 子进程的 stdout/stderr 全部追加到 `userData/logs/dsh.log`，这是排查「应用打不开 / UI 白屏」的首要入口。
 
-单实例锁：`app.requestSingleInstanceLock()`，二次启动只聚焦已有窗口。
+单实例锁：`app.requestSingleInstanceLock()`，二次启动会显示并聚焦已有窗口（兼容窗口已隐藏到托盘的情况）。
 
 ## 关键约束（改动前必读）
 
