@@ -1,6 +1,11 @@
-# Hoisted (npm-style) layout so electron-builder collects the full dependency
-# tree, including peer dependencies (the @deepseek-ai/cordis-* packages are
-# peers of every harness package and would otherwise be dropped on packaging).
+# Hoisted (npm-style) layout so electron-builder can traverse the dependency
+# tree through a flat node_modules instead of pnpm's virtual-store symlinks.
+#
+# NOTE: hoisting alone does NOT make electron-builder collect peer dependencies
+# — its production collector only reads `dependencies`/`optionalDependencies`
+# (app-builder-lib nodeModulesCollector.isProdDependency). The @deepseek-ai/*
+# runtime packages that dsh declares only as peers are therefore listed
+# explicitly in package.json `dependencies`, kept in sync by sync-upstream.mjs.
 nodeLinker: hoisted
 allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true

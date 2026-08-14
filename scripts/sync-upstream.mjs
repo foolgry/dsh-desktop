@@ -20,7 +20,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, appendFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, dirname } from 'node:path'
 import semver from 'semver'
@@ -28,6 +28,7 @@ import semver from 'semver'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PKG_PATH = join(ROOT, 'package.json')
 const UPSTREAM = '@deepseek-ai/dsh'
+const SCOPE = '@deepseek-ai'
 
 /** Latest published upstream version, straight from the npm registry. */
 function upstreamLatest() {
@@ -62,6 +63,84 @@ function nextVersion(current, upstream) {
   return candidate
 }
 
+/**
+ * Detect @deepseek-ai/* packages that are referenced ONLY as peerDependencies
+ * across the installed harness tree, never as a real `dependencies` entry.
+ *
+ * electron-builder's production collector reads only `dependencies` and
+ * `optionalDependencies` (app-builder-lib `nodeModulesCollector.isProdDependency`),
+ * so a runtime-required package declared solely as a peer would be dropped on
+ * packaging. Returning them lets the caller pin each one explicitly.
+ *
+ * @param {string} upstreamVersion - version to pin dsh-* peers to
+ * @returns {Record<string, string>} package name -> semver range
+ */
+function detectPeerOnlyRuntimeDeps(upstreamVersion) {
+  const scopeDir = join(ROOT, 'node_modules', SCOPE)
+  let names = []
+  try {
+    names = readdirSync(scopeDir).filter((n) => !n.startsWith('.'))
+  } catch {
+    return {} // node_modules absent (e.g. no install yet) — nothing to detect
+  }
+
+  const metas = new Map()
+  const depsReferenced = new Set()
+  const peerReferenced = new Set()
+  for (const name of names) {
+    const fullName = `${SCOPE}/${name}`
+    let pkgJson
+    try {
+      pkgJson = JSON.parse(readFileSync(join(scopeDir, name, 'package.json'), 'utf8'))
+    } catch {
+      continue
+    }
+    metas.set(fullName, pkgJson)
+    for (const dep of Object.keys(pkgJson.dependencies || {})) {
+      if (dep.startsWith(`${SCOPE}/`)) depsReferenced.add(dep)
+    }
+    for (const peer of Object.keys(pkgJson.peerDependencies || {})) {
+      if (peer.startsWith(`${SCOPE}/`)) peerReferenced.add(peer)
+    }
+  }
+
+  const result = {}
+  for (const fullName of peerReferenced) {
+    if (depsReferenced.has(fullName)) continue
+    const pkgJson = metas.get(fullName)
+    if (!pkgJson) continue // referenced but not installed — cannot pin
+    // dsh-* peers track the upstream release; other peers (e.g. cordis-*)
+    // keep their own installed version under a ^ range.
+    const version = fullName.startsWith(`${SCOPE}/dsh`) ? upstreamVersion : pkgJson.version
+    result[fullName] = `^${version}`
+  }
+  return result
+}
+
+/**
+ * Merge detected peer-only runtime deps into `deps`, adding new ones and
+ * bumping versions of existing entries. Entries are never removed: a peer that
+ * later becomes a real dependency elsewhere stays pinned (harmless — the package
+ * is still installed) rather than risk a stale reference after a rename.
+ * @param {Record<string, string>} deps - package.json `dependencies` to mutate
+ * @param {string} upstreamVersion - version to pin dsh-* peers to
+ */
+function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
+  const peerOnly = detectPeerOnlyRuntimeDeps(upstreamVersion)
+  const added = []
+  const updated = []
+  for (const [name, range] of Object.entries(peerOnly)) {
+    if (deps[name] == null) {
+      added.push(name)
+    } else if (deps[name] !== range) {
+      updated.push(`${name}: ${deps[name]} -> ${range}`)
+    }
+    deps[name] = range
+  }
+  if (added.length) console.log(`peer-only runtime deps added: ${added.join(', ')}`)
+  if (updated.length) console.log(`peer-only runtime deps updated: ${updated.join('; ')}`)
+}
+
 const force = process.argv.includes('--force')
 const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'))
 const latest = upstreamLatest()
@@ -75,6 +154,10 @@ if (!changed) {
   pkg.dependencies[UPSTREAM] = latest
   pkg.version = version
   pkg.dsh = { ...pkg.dsh, upstream: UPSTREAM, upstreamVersion: latest }
+  // Re-pin the @deepseek-ai/* peer-only runtime deps for the new upstream
+  // version: electron-builder's production collector ignores peerDependencies,
+  // so these must be listed as real dependencies to survive packaging.
+  syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
   writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
   console.log(`upstream ${pinned} -> ${latest}; desktop version -> ${version}`)
 }
