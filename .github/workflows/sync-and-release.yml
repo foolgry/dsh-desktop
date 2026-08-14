@@ -102,7 +102,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.os }}
-          path: dist-installer/*
+          path: |
+            dist-installer/*.dmg
+            dist-installer/*.zip
+            dist-installer/*.exe
+            dist-installer/*.blockmap
+            dist-installer/latest*.yml
           if-no-files-found: error
 
   release:
@@ -117,10 +122,11 @@ jobs:
 
       - name: Create published release with all installers
         run: |
+          mapfile -t files < <(find artifacts -type f | sort)
           gh release create "v${{ needs.sync.outputs.version }}" \
             --repo foolgry/dsh-desktop \
             --title "v${{ needs.sync.outputs.version }}" \
             --notes "Built on [@deepseek-ai/dsh ${{ needs.sync.outputs.upstream_version }}](https://www.npmjs.com/package/@deepseek-ai/dsh/v/${{ needs.sync.outputs.upstream_version }}). Unsigned build: macOS asks to confirm via right-click → Open; Windows shows a SmartScreen prompt → More info → Run anyway." \
-            artifacts/*
+            "${files[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
