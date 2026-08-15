@@ -6,6 +6,8 @@ Download-and-run desktop build of [DeepSeek Harness](https://github.com/deepseek
 
 > ⚠️ **This is a community (unofficial) build.** The upstream [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) is open-sourced under the MIT license. This repository is only an Electron desktop shell plus automated packaging scripts — it is not an official DeepSeek product. The DeepSeek name and whale logo are trademarks of DeepSeek, used here only to identify the packaged upstream software.
 
+📖 **Documentation**: [foolgry.github.io/dsh-desktop](https://foolgry.github.io/dsh-desktop/) — found a bug or have a suggestion? Please [open an issue](https://github.com/foolgry/dsh-desktop/issues).
+
 ## Download and install
 
 Get the latest version from the [Releases](https://github.com/foolgry/dsh-desktop/releases) page:

@@ -6,6 +6,8 @@ DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 N
 
 > ⚠️ **这是社区（非官方）构建**。上游 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 采用 MIT 协议开源，本仓库只是 Electron 桌面外壳和自动打包脚本，不是 DeepSeek 官方产品。DeepSeek 的名称和鲸鱼 Logo 为 DeepSeek 的商标，此处仅用于标识所打包的上游软件。
 
+📖 **文档站**：[foolgry.github.io/dsh-desktop/zh](https://foolgry.github.io/dsh-desktop/zh/) —— 遇到问题或有建议？欢迎到 [Issues](https://github.com/foolgry/dsh-desktop/issues) 反馈。
+
 ## 下载安装
 
 到 [Releases](https://github.com/foolgry/dsh-desktop/releases) 页面下载最新版本：
