@@ -5,10 +5,15 @@
  *
  * Desktop version scheme, designed to stay valid semver and strictly
  * increasing under electron-updater:
- * - upstream prerelease (e.g. 0.1.0-rc.6) → append a build number as an extra
- *   prerelease segment: 0.1.0-rc.6.1, 0.1.0-rc.6.2, …
+ * - upstream prerelease (e.g. 0.1.0-rc.6) → append a UTC build timestamp as
+ *   an extra prerelease segment: 0.1.0-rc.6.202508151030, …
  * - upstream stable (e.g. 0.1.0) → independent patch line starting at
  *   X.Y.(Z+1), bumped until it exceeds the current desktop version
+ *
+ * The timestamp segment is a fixed-width YYYYMMDDHHMM (12 digits until the
+ * year 10000), so lexicographic tag sorting (GitHub's tag dropdown, various
+ * release pickers) matches chronological order — a plain counter breaks at
+ * digit rollover, where "rc.6.9" sorts above "rc.6.11".
  *
  * Writes `changed`, `version`, and `upstream_version` to $GITHUB_OUTPUT when
  * present, and prints them otherwise. The lockfile refresh and the git
@@ -22,7 +27,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import semver from 'semver'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -36,6 +41,19 @@ function upstreamLatest() {
 }
 
 /**
+ * Fixed-width UTC minute stamp (YYYYMMDDHHMM) used as the prerelease build
+ * segment. UTC keeps CI runners in any timezone on the same clock.
+ */
+function buildStamp() {
+  const now = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return (
+    `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}` +
+    `${p(now.getUTCHours())}${p(now.getUTCMinutes())}`
+  )
+}
+
+/**
  * Compute the next desktop version for a new upstream release.
  * @param {string} current - current desktop version (package.json `version`)
  * @param {string} upstream - the upstream version being adopted
@@ -46,19 +64,21 @@ function nextVersion(current, upstream) {
   if (!parsed) throw new Error(`upstream version ${upstream} is not valid semver`)
   let candidate
   if (parsed.prerelease.length > 0) {
-    // Same upstream release already packaged (a --force rebuild): bump the
-    // trailing build number; a fresh upstream release starts it at 1.
-    candidate = current.startsWith(`${upstream}.`)
-      ? semver.inc(current, 'prerelease')
-      : `${upstream}.1`
+    // Every sync run gets a fresh timestamp, so a --force rebuild of the same
+    // upstream release naturally lands on a newer version without inspecting
+    // `current` first.
+    candidate = `${upstream}.${buildStamp()}`
   } else {
     // Stable upstream: independent patch line above it.
     candidate = `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`
   }
-  // Never publish a version that is not strictly newer (e.g. upstream
-  // released the patch we had already claimed).
+  // Never publish a version that is not strictly newer (same-minute --force
+  // rebuild, or upstream released the patch we had already claimed): bump the
+  // trailing numeric segment until it clears `current`.
   while (!semver.gt(candidate, current)) {
-    candidate = semver.inc(candidate, 'patch')
+    const segments = candidate.split('.')
+    segments[segments.length - 1] = String(Number(segments[segments.length - 1]) + 1)
+    candidate = segments.join('.')
   }
   return candidate
 }
@@ -141,39 +161,47 @@ function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
   if (updated.length) console.log(`peer-only runtime deps updated: ${updated.join('; ')}`)
 }
 
-const force = process.argv.includes('--force')
-const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'))
-const latest = upstreamLatest()
-const pinned = pkg.dependencies[UPSTREAM]
-const changed = force || pinned !== latest
+function main() {
+  const force = process.argv.includes('--force')
+  const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'))
+  const latest = upstreamLatest()
+  const pinned = pkg.dependencies[UPSTREAM]
+  const changed = force || pinned !== latest
 
-if (!changed) {
-  console.log(`upstream unchanged at ${latest}; nothing to do`)
-} else {
-  const version = nextVersion(pkg.version, latest)
-  pkg.dependencies[UPSTREAM] = latest
-  pkg.version = version
-  pkg.dsh = { ...pkg.dsh, upstream: UPSTREAM, upstreamVersion: latest }
-  // Re-pin the @deepseek-ai/* peer-only runtime deps for the new upstream
-  // version: electron-builder's production collector ignores peerDependencies,
-  // so these must be listed as real dependencies to survive packaging.
-  syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
-  writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
-  console.log(`upstream ${pinned} -> ${latest}; desktop version -> ${version}`)
+  if (!changed) {
+    console.log(`upstream unchanged at ${latest}; nothing to do`)
+  } else {
+    const version = nextVersion(pkg.version, latest)
+    pkg.dependencies[UPSTREAM] = latest
+    pkg.version = version
+    pkg.dsh = { ...pkg.dsh, upstream: UPSTREAM, upstreamVersion: latest }
+    // Re-pin the @deepseek-ai/* peer-only runtime deps for the new upstream
+    // version: electron-builder's production collector ignores peerDependencies,
+    // so these must be listed as real dependencies to survive packaging.
+    syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
+    writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
+    console.log(`upstream ${pinned} -> ${latest}; desktop version -> ${version}`)
+  }
+
+  const outputs = {
+    changed: String(changed),
+    version: pkg.version,
+    upstream_version: latest,
+  }
+  if (process.env.GITHUB_OUTPUT) {
+    appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      Object.entries(outputs)
+        .map(([key, value]) => `${key}=${value}`)
+        .join('\n') + '\n',
+    )
+  } else {
+    console.log(outputs)
+  }
 }
 
-const outputs = {
-  changed: String(changed),
-  version: pkg.version,
-  upstream_version: latest,
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main()
 }
-if (process.env.GITHUB_OUTPUT) {
-  appendFileSync(
-    process.env.GITHUB_OUTPUT,
-    Object.entries(outputs)
-      .map(([key, value]) => `${key}=${value}`)
-      .join('\n') + '\n',
-  )
-} else {
-  console.log(outputs)
-}
+
+export { nextVersion, buildStamp }

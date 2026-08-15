@@ -78,7 +78,7 @@ dist-installer/             # electron-builder 输出（gitignore）
 4. **整个 `node_modules` 必须 `asarUnpack`。** `dsh web` 是子进程执行的入口路径，asar 归档内的路径无法被 spawn 执行，因此 `electron-builder.yml` 里 `asarUnpack: node_modules/**`。`dshBin()` 还会把 `app.asar` 路径重写为 `app.asar.unpacked`。
 
 5. **版本号不要手动改。** 桌面版本由 `nextVersion()` 计算，规则：
-   - 上游预发布版（如 `0.1.0-rc.6`）→ 追加构建号：`0.1.0-rc.6.1`、`0.1.0-rc.6.2`…
+   - 上游预发布版（如 `0.1.0-rc.6`）→ 追加 UTC 构建时间戳：`0.1.0-rc.6.202508151030`。定宽 `YYYYMMDDHHMM`（12 位），保证 tag 的字母序 == 时间序——纯自增计数会在 9→10 进位处让 `rc.6.9` 字母序排在 `rc.6.11` 前面
    - 上游稳定版（如 `0.1.0`）→ 独立 patch 线 `X.Y.(Z+1)`
    - 保证严格递增且合法 semver（electron-updater 要求）
 
