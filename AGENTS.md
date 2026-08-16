@@ -105,5 +105,5 @@ dist-installer/             # electron-builder 输出（gitignore）
 
 ## 进一步阅读
 
-- [README.md](README.md) / [README.zh.md](README.zh.md) — 面向用户的说明（安装、使用、工作原理）
+- [README.md](README.md)（中文，默认）/ [README.en.md](README.en.md) — 面向用户的说明（安装、使用、工作原理）；微信群二维码在 `assets/wechat-group.jpg`（7 天过期，用户反馈失效时需重新替换）
 - 上游 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — dsh 本体的业务逻辑与配置
