@@ -20,10 +20,17 @@ DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 N
     ```sh
     xattr -cr "/Applications/DSH Desktop.app"
     ```
+  - 也可以用 Homebrew 安装（后续更新更方便，见下）：
+    ```sh
+    brew install --cask foolgry/tap/dsh-desktop
+    ```
 - **Windows（64 位）**：下载 `DSH-Desktop-*-win-x64-setup.exe`
   - SmartScreen 会提示风险：点 **更多信息 → 仍要运行**
 
-应用启动时会自动检查更新（每 4 小时一次）。Windows 自动安装；macOS（未签名）会弹窗提示并给下载链接。
+应用启动时会自动检查更新（每 4 小时一次）：
+
+- **Windows**：后台自动下载，弹窗点「Restart and update」即重启完成更新；不点也会在下次退出应用时自动安装
+- **macOS**（未签名，无法自我更新）：弹窗提示更新。如果是用 Homebrew 安装的，点「Update via Homebrew」会自动执行 `brew upgrade --cask dsh-desktop` + `xattr -cr` 并重启完成更新；否则点按钮跳转到 Releases 页手动下载
 
 ## 使用
 

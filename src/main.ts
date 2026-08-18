@@ -8,7 +8,7 @@
 
 import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, shell } from 'electron'
 import type { ChildProcess } from 'node:child_process'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
@@ -436,17 +436,146 @@ function createTray(port: number): void {
   tray.on('click', () => showWindow(port))
 }
 
+/** Homebrew cask token for installs that came from the community tap. */
+const BREW_CASK = 'dsh-desktop'
+/** Absolute brew locations — GUI apps inherit no shell PATH. */
+const BREW_BINS = ['/opt/homebrew/bin/brew', '/usr/local/bin/brew']
+
+function brewBin(): string | undefined {
+  return BREW_BINS.find((bin) => existsSync(bin))
+}
+
+/** Whether this installation is managed by Homebrew (the cask is installed). */
+function isBrewManaged(): boolean {
+  const brew = brewBin()
+  if (!brew) return false
+  try {
+    return spawnSync(brew, ['list', '--cask', BREW_CASK], { stdio: 'ignore' }).status === 0
+  } catch {
+    return false
+  }
+}
+
+/** Path of the .app bundle this process runs from (the `xattr -cr` target). */
+function appBundlePath(): string {
+  const marker = '.app/'
+  const idx = process.execPath.indexOf(marker)
+  return idx === -1 ? process.execPath : process.execPath.slice(0, idx + marker.length - 1)
+}
+
+/** Run a command with output appended to the dsh log; resolves the exit code. */
+function runLogged(command: string, args: string[]): Promise<number | null> {
+  return new Promise((resolve) => {
+    appendFileSync(logFile(), `\n=== update: ${command} ${args.join(' ')} ===\n`)
+    const child = spawn(command, args)
+    child.stdout?.on('data', (chunk: Buffer) => appendFileSync(logFile(), chunk))
+    child.stderr?.on('data', (chunk: Buffer) => appendFileSync(logFile(), chunk))
+    child.on('error', () => resolve(null))
+    child.on('exit', (code) => resolve(code))
+  })
+}
+
 /**
- * Wire electron-updater: check on start and then periodically. Unsigned
- * builds cannot apply updates on macOS, so a failed download falls back to a
- * dialog that opens the release page for manual download.
+ * macOS update path for Homebrew-managed installs: `brew upgrade --cask`,
+ * clear the quarantine attribute the unsigned build trips over, then offer an
+ * immediate relaunch. Failures fall back to the manual releases page.
+ */
+async function runBrewUpdate(): Promise<void> {
+  const brew = brewBin()
+  if (!brew) return
+  const code = await runLogged(brew, ['upgrade', '--cask', BREW_CASK])
+  if (code !== 0) {
+    const { response } = await dialog.showMessageBox({
+      type: 'error',
+      title: 'Update failed',
+      message: 'The Homebrew upgrade did not complete.',
+      detail: `See the log for brew's output: ${logFile()}\nYou can also install the latest version manually from the releases page.`,
+      buttons: ['Open releases page', 'Later'],
+    })
+    if (response === 0) void shell.openExternal(RELEASES_URL)
+    return
+  }
+  await runLogged('/usr/bin/xattr', ['-cr', appBundlePath()])
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    title: 'Update installed',
+    message: 'The new version was installed via Homebrew.',
+    detail: 'Restart DSH Desktop now to use it?',
+    buttons: ['Restart', 'Later'],
+  })
+  if (response !== 0) return
+  // app.exit() skips will-quit, so tear down the tray and dsh child here —
+  // an orphaned dsh server would otherwise keep holding its port.
+  quitting = true
+  tray?.destroy()
+  if (dshChild && dshChild.exitCode === null) dshChild.kill()
+  app.relaunch()
+  app.exit(0)
+}
+
+/**
+ * macOS update prompt: unsigned builds cannot update themselves, so offer the
+ * Homebrew path when the cask manages this install, else point at the
+ * releases page for a manual download.
+ */
+async function promptMacUpdate(version: string): Promise<void> {
+  const brewManaged = isBrewManaged()
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    title: 'Update available',
+    message: `DSH Desktop ${version} is available.`,
+    detail: brewManaged
+      ? 'This installation is managed by Homebrew and can be upgraded in place, then the app restarts.'
+      : 'macOS builds are unsigned and cannot update themselves. Download the latest installer from the releases page.',
+    buttons: brewManaged ? ['Update via Homebrew', 'Download from GitHub', 'Later'] : ['Open releases page', 'Later'],
+  })
+  if (brewManaged && response === 0) await runBrewUpdate()
+  else if (response === (brewManaged ? 1 : 0)) void shell.openExternal(RELEASES_URL)
+}
+
+/** Version already prompted for this run, so 4-hourly checks don't re-nag. */
+let promptedVersion: string | undefined
+/** Set once a background download starts; gates the error dialog to real
+ * download failures instead of transient network errors from checkForUpdates. */
+let downloadInFlight = false
+
+/**
+ * Wire electron-updater: check on start and then every 4 hours. Windows
+ * downloads in the background and offers a restart-to-update dialog; macOS
+ * skips the doomed self-update (unsigned builds) and goes straight to the
+ * Homebrew / manual-download prompt.
  */
 function setupAutoUpdate(): void {
   if (!app.isPackaged) return
   void import('electron-updater').then(({ autoUpdater }) => {
-    autoUpdater.autoDownload = true
+    autoUpdater.autoDownload = process.platform !== 'darwin'
+    autoUpdater.on('update-available', (info) => {
+      if (process.platform === 'darwin') {
+        if (info.version === promptedVersion) return
+        promptedVersion = info.version
+        void promptMacUpdate(info.version)
+      } else {
+        downloadInFlight = true
+      }
+    })
+    autoUpdater.on('update-downloaded', (info) => {
+      downloadInFlight = false
+      void dialog
+        .showMessageBox({
+          type: 'info',
+          title: 'Update ready',
+          message: `DSH Desktop ${info.version} has been downloaded.`,
+          detail: 'Restart now to apply the update. Without a restart it is applied the next time the app quits.',
+          buttons: ['Restart and update', 'Later'],
+        })
+        .then(({ response }) => {
+          if (response === 0) autoUpdater.quitAndInstall(true, true)
+        })
+    })
     autoUpdater.on('error', (error) => {
       appendFileSync(logFile(), `\n=== auto-update error: ${error.message} ===\n`)
+      if (!downloadInFlight) return
+      downloadInFlight = false
       void dialog
         .showMessageBox({
           type: 'info',

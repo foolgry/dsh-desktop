@@ -18,10 +18,17 @@ Get the latest version from the [Releases](https://github.com/foolgry/dsh-deskto
     ```sh
     xattr -cr "/Applications/DSH Desktop.app"
     ```
+  - Or install via Homebrew (easier updates afterwards, see below):
+    ```sh
+    brew install --cask foolgry/tap/dsh-desktop
+    ```
 - **Windows (64-bit)**: download `DSH-Desktop-*-win-x64-setup.exe`
   - SmartScreen will warn about risk: click **More info → Run anyway**
 
-The app checks for updates automatically (every 4 hours) after launch. Windows installs updates automatically; macOS (unsigned) shows a dialog with a download link.
+The app checks for updates automatically (every 4 hours) after launch:
+
+- **Windows**: the update downloads in the background; click "Restart and update" in the dialog to apply it, or it is installed automatically the next time the app quits
+- **macOS** (unsigned, so it cannot update itself): a dialog announces the new version. If the app was installed via Homebrew, "Update via Homebrew" runs `brew upgrade --cask dsh-desktop` + `xattr -cr` for you and restarts the app; otherwise a button opens the Releases page for a manual download
 
 ## Usage
 
