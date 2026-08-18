@@ -9,10 +9,10 @@
 import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, shell } from 'electron'
 import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 /** First port tried for the dsh web server. */
 const FIRST_PORT = 3080
@@ -93,6 +93,158 @@ function ensurePickerFallbackPatch(): string | undefined {
   const file = join(app.getPath('userData'), 'picker-browse-fallback.yml')
   writeFileSync(file, BROWSE_PICKER_PATCH, 'utf8')
   return file
+}
+
+/**
+ * Plugins the desktop build presets into the web profile. They ship as regular
+ * app dependencies (hoisted, asar-unpacked), so presetting needs no pnpm and
+ * no network on the user's machine — the exact state `dsh plugin --profile
+ * web add <name>` would produce, minus the registry round-trip.
+ */
+const PRESET_PLUGINS = ['dshmarket']
+
+/**
+ * The web profile's shipped bundle template. Must stay in sync with
+ * `PROFILE_TEMPLATES.web` in @deepseek-ai/dsh-app-boot — the profile we
+ * pre-create replaces the one `dsh web` would auto-initialize on first boot.
+ */
+const WEB_PROFILE_TEMPLATE = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
+
+/** Marker recording that the preset plugins were already applied. */
+function presetMarkerFile(): string {
+  return join(dshHome(), '.bundled-plugins-preset')
+}
+
+/** Profile manifest shape (the parts presetting touches). */
+interface ProfileManifest {
+  name?: string
+  private?: boolean
+  dependencies?: Record<string, string>
+  dsh?: { profile?: { bundles?: string[] } }
+}
+
+/** dsh's profile patch-layer template (mirrors initProfile in dsh-app-boot). */
+const PROFILE_PATCH_TEMPLATE = `# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; \`!!js\` expressions allowed).
+[]
+`
+
+/** dsh's profile pnpm settings template (mirrors initProfile in dsh-app-boot). */
+const PROFILE_PNPM_WORKSPACE = `packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+`
+
+/**
+ * Resolve a bundled plugin's directory inside this installation. Same
+ * require.resolve + asar-unpacked rewrite as {@link dshBin}; the plugin ships
+ * in the app's hoisted node_modules, which the parent-walk from dist/main.js
+ * reaches in both dev and packaged runs.
+ * @param name - the plugin's package name
+ * @returns the plugin's absolute package directory
+ */
+function bundledPluginDir(name: string): string {
+  const require = createRequire(import.meta.url)
+  const manifest = require.resolve(`${name}/package.json`)
+  const real = manifest.includes('app.asar')
+    ? manifest.replace('app.asar', 'app.asar.unpacked')
+    : manifest
+  return dirname(real)
+}
+
+/**
+ * Ensure `link` is a symlink to `target` (junction on win32, like dsh's own
+ * fallback healer). A path occupied by anything other than our symlink is
+ * left alone — something else owns the name, and resolution through it works.
+ * @param link - the symlink path to maintain
+ * @param target - the absolute directory it should point at
+ */
+function ensurePluginSymlink(link: string, target: string): void {
+  let stat
+  try {
+    stat = lstatSync(link)
+  } catch {
+    stat = undefined
+  }
+  if (stat !== undefined) {
+    if (!stat.isSymbolicLink()) return
+    if (readlinkSync(link) === target) return
+    unlinkSync(link)
+  }
+  symlinkSync(target, link, 'junction')
+}
+
+/**
+ * Preset {@link PRESET_PLUGINS} into the web profile before `dsh web` boots:
+ * append each to `dsh.profile.bundles` (with a `dependencies` entry, matching
+ * what `dsh plugin add` reconciles) and link it into the flat module fallback
+ * `$DSH_HOME/profiles/node_modules`. The fallback link is required: dsh's
+ * healProfilesModuleFallback only links packages from the dsh app's own
+ * dependency closure, which preset plugins are not part of, while the Loader
+ * imports every bundle by bare name from the profile directory.
+ *
+ * Runs at most once (marker file): a user who later removes a preset plugin
+ * via `dsh plugin remove` keeps that choice. Failures are logged and never
+ * block the app from booting.
+ */
+function presetBundledPlugins(): void {
+  try {
+    const marker = presetMarkerFile()
+    if (existsSync(marker)) return
+    const plugins = PRESET_PLUGINS.map((name) => {
+      const dir = bundledPluginDir(name)
+      const version = (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string }).version ?? '0.0.0'
+      return { name, dir, version }
+    })
+    const profileDir = join(dshHome(), 'profiles', 'web')
+    const manifestPath = join(profileDir, 'package.json')
+    mkdirSync(profileDir, { recursive: true })
+    let manifest: ProfileManifest
+    if (existsSync(manifestPath)) {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest
+    } else {
+      // Pre-create what `dsh web`'s first-boot initProfile would, with the
+      // preset plugins already layered in, so the profile is complete before
+      // the child ever loads it.
+      manifest = {
+        name: 'dsh-profile-web',
+        private: true,
+        dependencies: {},
+        dsh: { profile: { bundles: [...WEB_PROFILE_TEMPLATE] } },
+      }
+      const patchPath = join(profileDir, 'cordis.patch.yml')
+      if (!existsSync(patchPath)) writeFileSync(patchPath, PROFILE_PATCH_TEMPLATE)
+      const workspacePath = join(profileDir, 'pnpm-workspace.yaml')
+      if (!existsSync(workspacePath)) writeFileSync(workspacePath, PROFILE_PNPM_WORKSPACE)
+    }
+    const bundles = manifest.dsh?.profile?.bundles ?? []
+    let changed = false
+    for (const plugin of plugins) {
+      if (!bundles.includes(plugin.name)) {
+        bundles.push(plugin.name)
+        changed = true
+      }
+      manifest.dependencies ??= {}
+      if (manifest.dependencies[plugin.name] === undefined) {
+        manifest.dependencies[plugin.name] = `^${plugin.version}`
+        changed = true
+      }
+    }
+    if (changed) {
+      manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } }
+      writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
+    }
+    const fallbackDir = join(dshHome(), 'profiles', 'node_modules')
+    mkdirSync(fallbackDir, { recursive: true })
+    for (const plugin of plugins) ensurePluginSymlink(join(fallbackDir, plugin.name), plugin.dir)
+    writeFileSync(marker, `${JSON.stringify(Object.fromEntries(plugins.map((p) => [p.name, p.version])), undefined, 2)}\n`)
+    appendFileSync(logFile(), `=== preset bundled plugins: ${PRESET_PLUGINS.join(', ')} applied ===\n`)
+  } catch (error) {
+    appendFileSync(logFile(), `\n=== preset bundled plugins failed: ${error instanceof Error ? error.message : String(error)} ===\n`)
+  }
 }
 
 /**
@@ -328,6 +480,7 @@ let quitting = false
 async function boot(): Promise<void> {
   const port = await pickPort()
   serverPort = port
+  presetBundledPlugins()
   dshChild = startDsh(port)
   await waitReady(port, dshChild)
   mainWindow = createWindow(port)

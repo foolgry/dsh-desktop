@@ -68,6 +68,9 @@ importers:
       '@deepseek-ai/dsh-workflow':
         specifier: ^0.1.0-rc.6
         version: 0.1.0-rc.6(e4b85be78b99e33196048eadd46cc140)
+      dshmarket:
+        specifier: ^1.10.1
+        version: 1.10.1(@deepseek-ai/cordis@4.0.1)
       electron-updater:
         specifier: ^6.6.2
         version: 6.8.9
@@ -3742,6 +3745,11 @@ packages:
   dotenv@16.6.1:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
     engines: {node: '>=12'}
+
+  dshmarket@1.10.1:
+    resolution: {integrity: sha512-8AWM8RT2tttJsozTBm6mAfI+cNpCIbeBdP9IoydJdHlH/+x72aNqmv3AWdbNfKDDwkkqM2Ce/XRDhha9HG0Q5Q==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ^4.0.1
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -9505,6 +9513,10 @@ snapshots:
       dotenv: 16.6.1
 
   dotenv@16.6.1: {}
+
+  dshmarket@1.10.1(@deepseek-ai/cordis@4.0.1):
+    dependencies:
+      '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
 
   dunder-proto@1.0.1:
     dependencies:
