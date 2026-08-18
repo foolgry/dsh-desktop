@@ -14,16 +14,11 @@ DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 N
 
 到 [Releases](https://github.com/foolgry/dsh-desktop/releases) 页面下载最新版本：
 
-- **macOS（Apple Silicon / M 系列芯片）**：下载 `DSH-Desktop-*-mac-arm64.dmg`
-  - 未签名：首次打开如果提示"无法验证开发者"，**右键点应用 → 打开** 即可通过
-  - 如果提示 **"DSH Desktop 已损坏，无法打开"**：这是因为应用未做 Apple 公证，下载时被系统加了隔离属性。打开**终端**执行一次以下命令，然后即可正常打开：
-    ```sh
-    xattr -cr "/Applications/DSH Desktop.app"
-    ```
-  - 也可以用 Homebrew 安装（后续更新更方便，见下）：
-    ```sh
-    brew install --cask foolgry/tap/dsh-desktop
-    ```
+- **macOS（Apple Silicon / M 系列芯片）**：推荐用 Homebrew 安装，一条命令搞定（`xattr -cr` 清除未公证应用的隔离属性，避免「已损坏」提示；后续还能在 App 内一键更新，见下）：
+  ```sh
+  brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+  ```
+  也可以下载 `DSH-Desktop-*-mac-arm64.dmg` 手动安装：未签名，首次打开如果提示"无法验证开发者"，**右键点应用 → 打开**；若提示「已损坏」，在终端执行一次上面的 `xattr` 命令即可。
 - **Windows（64 位）**：下载 `DSH-Desktop-*-win-x64-setup.exe`
   - SmartScreen 会提示风险：点 **更多信息 → 仍要运行**
 

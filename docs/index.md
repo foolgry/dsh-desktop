@@ -28,7 +28,7 @@ features:
     details: Runs a dsh web service on 127.0.0.1 only. Your data stays in the app data directory and never touches your user home.
   - icon: 🔄
     title: Auto-update
-    details: Checks for new releases every 4 hours. Windows applies updates automatically; macOS shows a download dialog.
+    details: Checks for new releases every 4 hours. Windows downloads in the background and updates on one click; macOS upgrades in-app when installed via Homebrew.
   - icon: 🖥️
     title: Cross-platform
     details: Native macOS (Apple Silicon) and Windows installers, built and published automatically as upstream releases.

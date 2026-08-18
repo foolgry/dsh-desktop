@@ -12,16 +12,11 @@ Download-and-run desktop build of [DeepSeek Harness](https://github.com/deepseek
 
 Get the latest version from the [Releases](https://github.com/foolgry/dsh-desktop/releases) page:
 
-- **macOS (Apple Silicon / M-series chips)**: download `DSH-Desktop-*-mac-arm64.dmg`
-  - Unsigned: if macOS says it "cannot verify the developer" on first launch, **right-click the app → Open** to get past it
-  - If it says **"DSH Desktop is damaged and can't be opened"**: this happens because the app is not notarized by Apple, so macOS adds a quarantine attribute on download. Run the following once in **Terminal**, then it opens normally:
-    ```sh
-    xattr -cr "/Applications/DSH Desktop.app"
-    ```
-  - Or install via Homebrew (easier updates afterwards, see below):
-    ```sh
-    brew install --cask foolgry/tap/dsh-desktop
-    ```
+- **macOS (Apple Silicon / M-series chips)**: Homebrew is the recommended install — one command does everything (the `xattr -cr` clears the quarantine attribute on the unnotarized app, preventing the "damaged" error; it also enables in-app one-click updates later, see below):
+  ```sh
+  brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+  ```
+  Or download `DSH-Desktop-*-mac-arm64.dmg` and install manually: the app is unsigned, so if macOS says it "cannot verify the developer" on first launch, **right-click the app → Open**; if it says **"damaged and can't be opened"**, run the `xattr` command above once in Terminal.
 - **Windows (64-bit)**: download `DSH-Desktop-*-win-x64-setup.exe`
   - SmartScreen will warn about risk: click **More info → Run anyway**
 

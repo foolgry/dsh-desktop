@@ -28,7 +28,7 @@ features:
     details: 只在 127.0.0.1 起一个 dsh web 服务。数据存在系统应用数据目录，绝不污染你的用户目录。
   - icon: 🔄
     title: 自动更新
-    details: 每 4 小时检查一次新版本。Windows 自动安装；macOS 弹窗提示并给下载链接。
+    details: 每 4 小时检查一次新版本。Windows 后台下载、点一下重启即更新；macOS 用 Homebrew 安装时可在 App 内一键升级。
   - icon: 🖥️
     title: 跨平台
     details: 提供 macOS（Apple Silicon）和 Windows 原生安装包，随上游发布自动构建发布。
