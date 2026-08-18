@@ -9,10 +9,10 @@
 import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, shell } from 'electron'
 import type { ChildProcess } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 
 /** First port tried for the dsh web server. */
 const FIRST_PORT = 3080
@@ -272,6 +272,52 @@ async function pickPort(): Promise<number> {
 }
 
 /**
+ * Standalone pnpm plus a `node` shim for in-app plugin installs. dshmarket
+ * and `dsh plugin add` spawn `pnpm` by bare name (and package lifecycle
+ * scripts spawn `node`), but GUI launches inherit a bare launchd PATH with
+ * neither — the marketplace then fails with "cannot find Node". We ship
+ * `@pnpm/exe` (a self-contained SEA binary, no system Node needed) and
+ * prepend its dir to the dsh child's PATH; the POSIX node shim reuses the
+ * same Electron binary dsh runs on, which also keeps native builds on the
+ * ABI the runtime actually loads.
+ * @returns PATH prefix (trailing delimiter included) for the child env
+ */
+function toolingPathPrefix(): string {
+  try {
+    const parts: string[] = []
+    if (process.platform !== 'win32') {
+      const shimDir = join(app.getPath('userData'), 'tooling-bin')
+      mkdirSync(shimDir, { recursive: true })
+      const nodeShim = join(shimDir, 'node')
+      const script = `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "$@"\n`
+      if (!existsSync(nodeShim) || readFileSync(nodeShim, 'utf8') !== script) {
+        writeFileSync(nodeShim, script, { mode: 0o755 })
+      }
+      chmodSync(nodeShim, 0o755)
+      parts.push(shimDir)
+    }
+    const require = createRequire(import.meta.url)
+    const pkgJson = require.resolve('@pnpm/exe/package.json')
+    const real = pkgJson.includes('app.asar')
+      ? pkgJson.replace('app.asar', 'app.asar.unpacked')
+      : pkgJson
+    const pnpmDir = dirname(real)
+    // The published tarball ships the SEA binary without the exec bit, and
+    // setup.js's hardlink does not add it — fix it here or spawn gets EACCES.
+    try {
+      chmodSync(join(pnpmDir, process.platform === 'win32' ? 'pnpm.exe' : 'pnpm'), 0o755)
+    } catch {
+      // read-only install location; the spawn error surfaces downstream
+    }
+    parts.push(pnpmDir)
+    return parts.join(delimiter) + delimiter
+  } catch (error) {
+    appendFileSync(logFile(), `\n=== tooling setup failed: ${error instanceof Error ? error.message : String(error)} ===\n`)
+    return ''
+  }
+}
+
+/**
  * Spawn `dsh web --port <port>` under Electron's embedded Node
  * (`ELECTRON_RUN_AS_NODE`), so end users need no system Node. Output is
  * appended to the userData log.
@@ -299,6 +345,7 @@ function startDsh(port: number): ChildProcess {
   const child = spawn(process.execPath, args, {
     env: {
       ...process.env,
+      PATH: `${toolingPathPrefix()}${process.env.PATH ?? ''}`,
       ELECTRON_RUN_AS_NODE: '1',
       DSH_HOME: dshHome(),
       DSH_TELEMETRY_DISABLED: '1',

@@ -16,7 +16,7 @@
 |------|------|------|
 | 运行时 | Electron 43（内嵌 Node 22/24） | 不依赖系统 Node |
 | 语言 | TypeScript，ESM（`"type": "module"`） | `target: ES2022`，`moduleResolution: NodeNext`，`strict` |
-| 包管理 | **pnpm 11.7.0**（hoisted 模式） | 见下方关键约束，**禁止用 npm** |
+| 包管理 | **pnpm 11.22.0**（hoisted 模式） | 见下方关键约束，**禁止用 npm**；版本须与 `@pnpm/exe` 对齐（约束 9） |
 | 任务运行 | **just**（`justfile`） | 所有命令优先走 just |
 | 打包 | electron-builder 26 | dmg+zip（mac）、nsis（win） |
 | 自动更新 | electron-updater | 每 4 小时检查；Windows 后台下载后弹「重启更新」，macOS 未签名走 Homebrew（brew 安装时）或 Releases 页手动下载 |
@@ -57,6 +57,7 @@ dist-installer/             # electron-builder 输出（gitignore）
    - `ELECTRON_RUN_AS_NODE=1`（让 Electron 进程当 Node 用）
    - `DSH_HOME=userData/dsh-home`（状态隔离到应用数据目录，不污染用户目录）
    - `DSH_TELEMETRY_DISABLED=1`
+   - `PATH` 前置 `toolingPathPrefix()`：`userData/tooling-bin`（POSIX 的 `node` shim，复用 Electron 内嵌 Node）+ `@pnpm/exe` 目录——插件市场 / `dsh plugin add` 按裸名 spawn `pnpm`/`node`，而 GUI 启动的 PATH 里都没有，缺了这步插件市场报「cannot find Node」
    - `--expose-internals` 是 cordis-plugin-hmr 的 HMR 服务所需
 3. **`waitReady()`** — 每 500ms 轮询 `http://127.0.0.1:PORT/`，最多等 60s；期间若子进程提前退出则直接报错。
 4. **`createWindow()`** — 单个 BrowserWindow 加载本地 UI；导航守卫把任何非 `127.0.0.1` 的跳转交给系统浏览器。**点 × 不退出**：`close` 事件被拦截改为隐藏窗口，真实退出只有托盘菜单「Quit」/ Cmd+Q（`before-quit` 置 `quitting=true` 放行 close），`window-all-closed` 是空操作（issue #3 托盘驻留）。
@@ -87,6 +88,8 @@ dist-installer/             # electron-builder 输出（gitignore）
 7. **macOS 构建未签名 / 未公证。** CI 里 `CSC_IDENTITY_AUTO_DISCOVERY=false`。用户首次打开需右键 → 打开；若提示「已损坏」需 `xattr -cr "/Applications/DSH Desktop.app"`。Homebrew 渠道由独立仓库 [foolgry/homebrew-tap](https://github.com/foolgry/homebrew-tap) 提供（cask `dsh-desktop`，仅 arm64），其 `sync-cask.yml` 每天跟踪本仓库最新 release 自动更新版本与 sha256——**发布产物文件名（`DSH.Desktop-<version>-mac-arm64.dmg`）变动时必须同步改 cask 的 `url`**。
 
 8. **ESM 项目，导入用 NodeNext 风格。** 例如 `.mjs` 脚本里用 `import.meta.url` + `createRequire`。`@deepseek-ai/dsh` 无 `exports` map，`dshBin()` 直接 `require.resolve('@deepseek-ai/dsh/lib/bin.js')`。
+
+9. **`@pnpm/exe`（插件市场的内置 pnpm）有三个坑，改动前必读。** ① 其 npm tarball 的 SEA 二进制**不带执行位**，setup.js 的 hardlink 也不补，`toolingPathPrefix()` 里的运行时 `chmodSync` 是必需的，别删；② SEA 二进制要求同目录有 `dist/pnpm.mjs`，所以 PATH 必须指 `@pnpm/exe` 包目录，不能直接指 `@pnpm/macos-arm64` 等平台包；③ 它的 `bin` 会在 `node_modules/.bin/pnpm` 遮蔽 corepack，electron-builder 的依赖收集器 spawn pnpm 时命中的就是它——**`packageManager` 字段必须与 `@pnpm/exe` 版本保持一致**（当前 11.22.0），否则收集器报版本不一致直接挂。另外它让 dmg 从 ~153MB 涨到 ~237MB，升版时留意体积。
 
 ## CI 流程（`.github/workflows/sync-and-release.yml`）
 
