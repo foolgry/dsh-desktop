@@ -75,16 +75,18 @@ dist-installer/             # electron-builder 输出（gitignore）
 
 3. **peer-only 运行时依赖由脚本自动维护，不要手动删。** dsh 树里有些 `@deepseek-ai/*` 包只在 `peerDependencies` 中出现，而 electron-builder 的生产收集器（`nodeModulesCollector.isProdDependency`）**只读 `dependencies`/`optionalDependencies`**，会漏掉纯 peer 包。`sync-upstream.mjs` 的 `detectPeerOnlyRuntimeDeps()` 会在升版时把它们 pin 到 `dependencies`。设计上**只增不删**——即便某包后来变成真依赖，留着无害，删了反而可能因改名产生悬空引用。
 
-4. **整个 `node_modules` 必须 `asarUnpack`。** `dsh web` 是子进程执行的入口路径，asar 归档内的路径无法被 spawn 执行，因此 `electron-builder.yml` 里 `asarUnpack: node_modules/**`。`dshBin()` 还会把 `app.asar` 路径重写为 `app.asar.unpacked`。
+4. **`minimumReleaseAgeExclude` 必须保持 `'@deepseek-ai/*'` 通配，不要改成逐包 pin 版本。** pnpm 默认 24 小时最小发布龄检查，而本仓库就是要小时内跟进上游，所以整个第一方 scope 豁免。rc.6 时代这里曾是 ~190 行 `name@version` 列表，sync 升 rc.7 后列表过期、CI 的 `pnpm install --frozen-lockfile` 全部失败（ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION），且 **sync 已推 tag、build 失败后，后续定时 run 因上游无变化跳过 build，该 tag 永远不会出 release**——只能手动 `gh run rerun --failed` 或 force 重跑补救。
 
-5. **版本号不要手动改。** 桌面版本由 `nextVersion()` 计算，规则：
+5. **整个 `node_modules` 必须 `asarUnpack`。** `dsh web` 是子进程执行的入口路径，asar 归档内的路径无法被 spawn 执行，因此 `electron-builder.yml` 里 `asarUnpack: node_modules/**`。`dshBin()` 还会把 `app.asar` 路径重写为 `app.asar.unpacked`。
+
+6. **版本号不要手动改。** 桌面版本由 `nextVersion()` 计算，规则：
    - 上游预发布版（如 `0.1.0-rc.6`）→ 追加 UTC 构建时间戳：`0.1.0-rc.6.202508151030`。定宽 `YYYYMMDDHHMM`（12 位），保证 tag 的字母序 == 时间序——纯自增计数会在 9→10 进位处让 `rc.6.9` 字母序排在 `rc.6.11` 前面
    - 上游稳定版（如 `0.1.0`）→ 独立 patch 线 `X.Y.(Z+1)`
    - 保证严格递增且合法 semver（electron-updater 要求）
 
-6. **macOS 构建未签名 / 未公证。** CI 里 `CSC_IDENTITY_AUTO_DISCOVERY=false`。用户首次打开需右键 → 打开；若提示「已损坏」需 `xattr -cr "/Applications/DSH Desktop.app"`。Homebrew 渠道由独立仓库 [foolgry/homebrew-tap](https://github.com/foolgry/homebrew-tap) 提供（cask `dsh-desktop`，仅 arm64），其 `sync-cask.yml` 每天跟踪本仓库最新 release 自动更新版本与 sha256——**发布产物文件名（`DSH.Desktop-<version>-mac-arm64.dmg`）变动时必须同步改 cask 的 `url`**。
+7. **macOS 构建未签名 / 未公证。** CI 里 `CSC_IDENTITY_AUTO_DISCOVERY=false`。用户首次打开需右键 → 打开；若提示「已损坏」需 `xattr -cr "/Applications/DSH Desktop.app"`。Homebrew 渠道由独立仓库 [foolgry/homebrew-tap](https://github.com/foolgry/homebrew-tap) 提供（cask `dsh-desktop`，仅 arm64），其 `sync-cask.yml` 每天跟踪本仓库最新 release 自动更新版本与 sha256——**发布产物文件名（`DSH.Desktop-<version>-mac-arm64.dmg`）变动时必须同步改 cask 的 `url`**。
 
-7. **ESM 项目，导入用 NodeNext 风格。** 例如 `.mjs` 脚本里用 `import.meta.url` + `createRequire`。`@deepseek-ai/dsh` 无 `exports` map，`dshBin()` 直接 `require.resolve('@deepseek-ai/dsh/lib/bin.js')`。
+8. **ESM 项目，导入用 NodeNext 风格。** 例如 `.mjs` 脚本里用 `import.meta.url` + `createRequire`。`@deepseek-ai/dsh` 无 `exports` map，`dshBin()` 直接 `require.resolve('@deepseek-ai/dsh/lib/bin.js')`。
 
 ## CI 流程（`.github/workflows/sync-and-release.yml`）
 
