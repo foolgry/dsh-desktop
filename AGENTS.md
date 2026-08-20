@@ -59,12 +59,14 @@ dist-installer/             # electron-builder 输出（gitignore）
    - `DSH_TELEMETRY_DISABLED=1`
    - `PATH` 前置 `toolingPathPrefix()`：`userData/tooling-bin`（POSIX 的 `node` shim，复用 Electron 内嵌 Node）+ `@pnpm/exe` 目录——插件市场 / `dsh plugin add` 按裸名 spawn `pnpm`/`node`，而 GUI 启动的 PATH 里都没有，缺了这步插件市场报「cannot find Node」
    - `--expose-internals` 是 cordis-plugin-hmr 的 HMR 服务所需
-3. **`waitReady()`** — 每 500ms 轮询 `http://127.0.0.1:PORT/`，最多等 60s；期间若子进程提前退出则直接报错。
+3. **`waitReady()`** — 每 500ms 轮询 `http://127.0.0.1:PORT/`，最多等 60s；期间若子进程提前退出则直接报错。**必须连续 3 次 OK 才算就绪**：`dsh web` 先绑端口再加载插件树，插件崩溃时服务器能短暂（~50ms）应答 200 再退出，单次 OK 会误判就绪、把窗口指向已死的服务器。
 4. **`createWindow()`** — 单个 BrowserWindow 加载本地 UI；导航守卫把任何非 `127.0.0.1` 的跳转交给系统浏览器。**点 × 不退出**：`close` 事件被拦截改为隐藏窗口，真实退出只有托盘菜单「Quit」/ Cmd+Q（`before-quit` 置 `quitting=true` 放行 close），`window-all-closed` 是空操作（issue #3 托盘驻留）。
 5. **`createTray()`** — 系统托盘图标（36px PNG 以 data URL 内嵌在 `main.ts`，因为 electron-builder 只打包 `dist/` 和 `node_modules/`；改图标需按 `TRAY_ICON_DATA_URL` 注释里的 magick 命令重新生成 base64，**不要手贴长 base64，容易丢字符导致图标空白**）。图标以 `addRepresentation({scaleFactor: 2})` 声明（36px = 18pt 逻辑尺寸），直接 `createFromDataURL` 的 1x 大图在 macOS 菜单栏会被裁剪显示为超大。macOS 上用 `setTemplateImage(true)` 渲染为自适应菜单栏明暗的单色剪影，Windows 保留彩色。左键/菜单「Show」恢复窗口，「Quit」才是真正退出，`will-quit` 里 kill dsh 子进程。
 6. **`setupAutoUpdate()`** — 仅在打包后运行。Windows：`autoDownload` 后台下载，`update-downloaded` 弹「Restart and update / Later」，确认后 `quitAndInstall(true, true)` 静默安装并重启；不点则下次退出时自动安装。macOS：未签名无法自我更新，`autoDownload` 关闭，`update-available` 直接弹窗——`isBrewManaged()` 检测到 `brew list --cask dsh-desktop` 成功（brew 路径硬编码 `/opt/homebrew` 与 `/usr/local`，GUI 应用没有 shell PATH）时提供「Update via Homebrew」：跑 `brew upgrade --cask dsh-desktop` → `xattr -cr <bundle>` → 手动 kill dsh 子进程后 `app.relaunch()` + `app.exit(0)`（`app.exit` 不触发 `will-quit`，必须自己清理）；否则按钮打开 Releases 页。`error` 弹窗只在下载失败时出现（`downloadInFlight` 门控），网络抖动只记日志；`promptedVersion` 防止每 4 小时重复弹同一版本。
 
 子进程的 stdout/stderr 全部追加到 `userData/logs/dsh.log`，这是排查「应用打不开 / UI 白屏」的首要入口。
+
+**插件崩溃的安全模式（`src/safe-mode.ts`）**：`boot()` 是一个带恢复阶梯的重试循环——第一次失败静默重试；再失败则用 `findCulprit()` 解析日志尾部（只扫最后一个 `=== dsh web starting` 标记之后的内容）定位肇事插件，**弹窗确认后**分级处理：① 加载期崩溃（`failed to apply/import loader entry <id> (<pkg>)`）→ 往 `profiles/web/cordis.patch.yml` 追加 `- id: <id> / disabled: true`（与插件市场的「停用」同一机制，用户可在市场 UI 直接重新启用）；② bundle 解析期崩溃（`cannot resolve profile bundle`，发生在 patch 应用之前，`disabled` 来不及生效）→ 从 profile `package.json` 的 `dsh.profile.bundles` 摘除（保留 `dependencies`）；③ 无法归因 → 「全量安全模式」：备份两个 patch 层（`.safe-backup`）并摘掉所有非内置 bundle（内置 = `@deepseek-ai/dsh-base` + `dsh-web-app`，动了就没有 UI）。每步改动记入 `userData/safe-mode.json`，托盘菜单据此出现「Restore disabled plugins and restart」（`restoreAll()` 逆序还原后 relaunch）。注意：`activate` 事件在 macOS 启动早期就会触发，必须用 `booted` 标志挡住，否则会在服务器就绪前创建出指向死端口的白屏窗口。
 
 单实例锁：`app.requestSingleInstanceLock()`，二次启动会显示并聚焦已有窗口（兼容窗口已隐藏到托盘的情况）。
 

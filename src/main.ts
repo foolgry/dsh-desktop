@@ -13,6 +13,16 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSy
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { delimiter, dirname, join } from 'node:path'
+import {
+  disableEntry,
+  enterFullSafeMode,
+  findCulprit,
+  loadRecoveryActions,
+  readLastAttemptLog,
+  recordRecoveryAction,
+  removeBundle,
+  restoreAll,
+} from './safe-mode.js'
 
 /** First port tried for the dsh web server. */
 const FIRST_PORT = 3080
@@ -35,6 +45,16 @@ const TRAY_ICON_DATA_URL =
 /** Directory holding dsh's own state (profiles, sessions), inside userData. */
 function dshHome(): string {
   return join(app.getPath('userData'), 'dsh-home')
+}
+
+/** The web profile directory, where user-installed plugins are registered. */
+function webProfileDir(): string {
+  return join(dshHome(), 'profiles', 'web')
+}
+
+/** Recovery-action record consumed by the tray's restore menu item. */
+function safeModeStateFile(): string {
+  return join(app.getPath('userData'), 'safe-mode.json')
 }
 
 /** File that receives the dsh child's stdout and stderr. */
@@ -361,21 +381,31 @@ function startDsh(port: number): ChildProcess {
 }
 
 /**
- * Poll the server until it answers HTTP or the child dies.
+ * Poll the server until it answers HTTP or the child dies. Readiness requires
+ * three consecutive OK answers: `dsh web` binds its port before the plugin
+ * tree finishes loading, so a plugin crash lets the server answer for a
+ * brief window (~50ms) and then exit — a single OK is not proof of life.
  * @param port - port the server was asked to bind
  * @param child - the dsh child, watched for early exit
  */
 async function waitReady(port: number, child: ChildProcess): Promise<void> {
   const deadline = Date.now() + READY_TIMEOUT_MS
+  let stableAnswers = 0
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`dsh exited with code ${child.exitCode} before becoming ready`)
     }
     try {
       const res = await fetch(`http://127.0.0.1:${port}/`)
-      if (res.ok) return
+      if (res.ok) {
+        stableAnswers++
+        if (stableAnswers >= 3) return
+      } else {
+        stableAnswers = 0
+      }
     } catch {
       // connection refused while the server is still booting; keep polling
+      stableAnswers = 0
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
@@ -467,12 +497,22 @@ function createTray(port: number): void {
   if (process.platform === 'darwin') icon.setTemplateImage(true)
   tray = new Tray(icon)
   tray.setToolTip('DSH Desktop')
+  // Recovery actions survive the crash that triggered them, so the restore
+  // item is offered whenever the record is non-empty — not only right after
+  // a safe-mode boot.
+  const recovery = loadRecoveryActions(safeModeStateFile()).length > 0
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Show DSH Desktop', click: () => showWindow(port) },
+      { label: '显示 DSH Desktop', click: () => showWindow(port) },
+      ...(recovery
+        ? ([
+            { type: 'separator' },
+            { label: '恢复被禁用的插件并重启', click: () => restorePluginsAndRelaunch() },
+          ] as const)
+        : []),
       { type: 'separator' },
       {
-        label: 'Quit DSH Desktop',
+        label: '退出 DSH Desktop',
         click: () => {
           quitting = true
           app.quit()
@@ -534,10 +574,10 @@ async function runBrewUpdate(): Promise<void> {
   if (code !== 0) {
     const { response } = await dialog.showMessageBox({
       type: 'error',
-      title: 'Update failed',
-      message: 'The Homebrew upgrade did not complete.',
-      detail: `See the log for brew's output: ${logFile()}\nYou can also install the latest version manually from the releases page.`,
-      buttons: ['Open releases page', 'Later'],
+      title: '更新失败',
+      message: '通过 Homebrew 升级没有完成。',
+      detail: `brew 的输出见日志：${logFile()}\n也可以从发布页手动下载最新版本安装。`,
+      buttons: ['打开发布页', '稍后'],
     })
     if (response === 0) void shell.openExternal(RELEASES_URL)
     return
@@ -545,10 +585,10 @@ async function runBrewUpdate(): Promise<void> {
   await runLogged('/usr/bin/xattr', ['-cr', appBundlePath()])
   const { response } = await dialog.showMessageBox({
     type: 'info',
-    title: 'Update installed',
-    message: 'The new version was installed via Homebrew.',
-    detail: 'Restart DSH Desktop now to use it?',
-    buttons: ['Restart', 'Later'],
+    title: '更新已安装',
+    message: '新版本已通过 Homebrew 安装完成。',
+    detail: '现在重启 DSH Desktop 以使用新版本吗？',
+    buttons: ['重启', '稍后'],
   })
   if (response !== 0) return
   // app.exit() skips will-quit, so tear down the tray and dsh child here —
@@ -569,12 +609,12 @@ async function promptMacUpdate(version: string): Promise<void> {
   const brewManaged = isBrewManaged()
   const { response } = await dialog.showMessageBox({
     type: 'info',
-    title: 'Update available',
-    message: `DSH Desktop ${version} is available.`,
+    title: '发现新版本',
+    message: `DSH Desktop ${version} 已发布。`,
     detail: brewManaged
-      ? 'This installation is managed by Homebrew and can be upgraded in place, then the app restarts.'
-      : 'macOS builds are unsigned and cannot update themselves. Download the latest installer from the releases page.',
-    buttons: brewManaged ? ['Update via Homebrew', 'Download from GitHub', 'Later'] : ['Open releases page', 'Later'],
+      ? '当前安装由 Homebrew 管理，可以原地升级，完成后应用会自动重启。'
+      : 'macOS 版本未签名，无法自动更新。请从发布页下载最新安装包。',
+    buttons: brewManaged ? ['通过 Homebrew 更新', '从 GitHub 下载', '稍后'] : ['打开发布页', '稍后'],
   })
   if (brewManaged && response === 0) await runBrewUpdate()
   else if (response === (brewManaged ? 1 : 0)) void shell.openExternal(RELEASES_URL)
@@ -610,10 +650,10 @@ function setupAutoUpdate(): void {
       void dialog
         .showMessageBox({
           type: 'info',
-          title: 'Update ready',
-          message: `DSH Desktop ${info.version} has been downloaded.`,
-          detail: 'Restart now to apply the update. Without a restart it is applied the next time the app quits.',
-          buttons: ['Restart and update', 'Later'],
+          title: '更新已就绪',
+          message: `DSH Desktop ${info.version} 已下载完成。`,
+          detail: '现在重启以应用更新。不重启的话，下次退出应用时也会自动安装。',
+          buttons: ['重启并更新', '稍后'],
         })
         .then(({ response }) => {
           if (response === 0) autoUpdater.quitAndInstall(true, true)
@@ -626,10 +666,10 @@ function setupAutoUpdate(): void {
       void dialog
         .showMessageBox({
           type: 'info',
-          title: 'Update available',
-          message: 'A new version is available but could not be installed automatically.',
-          detail: 'Download the latest installer from the releases page.',
-          buttons: ['Open releases page', 'Later'],
+          title: '发现新版本',
+          message: '有新版本可用，但无法自动安装。',
+          detail: '请从发布页下载最新安装包。',
+          buttons: ['打开发布页', '稍后'],
         })
         .then(({ response }) => {
           if (response === 0) void shell.openExternal(RELEASES_URL)
@@ -652,15 +692,155 @@ let tray: Tray | undefined
 let serverPort = 0
 /** Set only by an explicit quit (tray menu, Cmd+Q); guards the close-to-tray interception. */
 let quitting = false
+/** Set once the server is ready and the window/tray exist; `activate` before
+ * that point would otherwise create a window pointed at a dead port. */
+let booted = false
 
+/**
+ * Ask the user about one recovery step. "View log" reveals the log in the
+ * file manager and re-shows the same dialog; anything else resolves the
+ * final choice.
+ * @param options - dialog text; `confirm` is the recovery button label
+ * @returns whether the user approved the recovery action
+ */
+async function confirmRecovery(options: { title: string; message: string; detail: string; confirm: string }): Promise<boolean> {
+  for (;;) {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: options.title,
+      message: options.message,
+      detail: `${options.detail}\n\n日志：${logFile()}`,
+      buttons: [options.confirm, '查看日志', '退出'],
+      defaultId: 0,
+      cancelId: 2,
+    })
+    if (response === 1) {
+      shell.showItemInFolder(logFile())
+      continue
+    }
+    return response === 0
+  }
+}
+
+/**
+ * Decide the next recovery step after a failed boot attempt, escalating one
+ * rung at a time: silent retry → disable the blamed plugin entry → remove an
+ * unloadable bundle → full safe mode (every self-installed plugin off). Each
+ * rung is tried at most once per session (`tried`) and every mutation goes
+ * through the confirmation dialog before being recorded for the tray's
+ * restore item.
+ * @param attempt - 1-based count of the attempt that just failed
+ * @param tried - recovery rungs already applied this session
+ * @returns whether to retry booting after the applied fix
+ */
+async function proposeRecovery(attempt: number, tried: Set<string>): Promise<boolean> {
+  // First failure may be transient (port race, slow disk): retry silently.
+  if (attempt === 1) return true
+  const culprit = findCulprit(readLastAttemptLog(logFile()))
+  const profileDir = webProfileDir()
+  if (culprit?.kind === 'apply' && !tried.has(`entry:${culprit.entryId}`)) {
+    tried.add(`entry:${culprit.entryId}`)
+    const approved = await confirmRecovery({
+      title: '插件加载失败',
+      message: `插件「${culprit.packageName}」导致 DSH 无法启动。`,
+      detail:
+        '是否只禁用这个插件并重试？之后可以随时在插件市场重新启用。' +
+        '如果问题持续存在，请向插件作者反馈。',
+      confirm: '禁用插件并重试',
+    })
+    if (!approved) return false
+    const block = disableEntry(join(profileDir, 'cordis.patch.yml'), culprit.entryId)
+    if (block !== undefined) {
+      recordRecoveryAction(safeModeStateFile(), { type: 'disable-entry', entryId: culprit.entryId, block })
+      appendFileSync(logFile(), `\n=== safe mode: disabled plugin entry "${culprit.entryId}" (${culprit.packageName}) ===\n`)
+    } else {
+      appendFileSync(logFile(), `\n=== safe mode: plugin entry "${culprit.entryId}" was already disabled ===\n`)
+    }
+    return true
+  }
+  if (culprit?.kind === 'unresolvable' && !tried.has(`bundle:${culprit.packageName}`)) {
+    tried.add(`bundle:${culprit.packageName}`)
+    const approved = await confirmRecovery({
+      title: '插件文件缺失',
+      message: `插件「${culprit.packageName}」无法加载，它的文件缺失或不完整。`,
+      detail:
+        '是否把它从启动列表中移除并重试？插件本体仍然保留，之后可以通过托盘菜单' +
+        '「恢复被禁用的插件」还原，或在插件市场重新安装。',
+      confirm: '移除插件并重试',
+    })
+    if (!approved) return false
+    removeBundle(join(profileDir, 'package.json'), culprit.packageName)
+    recordRecoveryAction(safeModeStateFile(), { type: 'remove-bundle', packageName: culprit.packageName })
+    appendFileSync(logFile(), `\n=== safe mode: removed bundle "${culprit.packageName}" from the profile ===\n`)
+    return true
+  }
+  if (!tried.has('full')) {
+    tried.add('full')
+    const approved = await confirmRecovery({
+      title: '启动失败',
+      message: 'DSH 多次启动失败，且无法定位到具体某个插件。',
+      detail:
+        '是否以安全模式启动？所有自行安装的插件都会被禁用（内置功能不受影响）。' +
+        '启动成功后，可通过托盘菜单「恢复被禁用的插件」一键还原。\n\n' +
+        '如果安全模式也起不来，多半是安装本身坏了——请重新下载安装最新版本。',
+      confirm: '以安全模式启动',
+    })
+    if (!approved) return false
+    const action = enterFullSafeMode(dshHome(), profileDir, WEB_PROFILE_TEMPLATE)
+    recordRecoveryAction(safeModeStateFile(), action)
+    appendFileSync(logFile(), `\n=== safe mode: full plugin strip, removed bundles: ${action.removedBundles.join(', ') || '(none)'} ===\n`)
+    return true
+  }
+  return false
+}
+
+/**
+ * Tray-menu restore: undo every recorded safe-mode mutation and relaunch so
+ * the profile boots with the restored plugins. Uses `app.exit` like the
+ * Homebrew update path, so the child and tray are torn down manually first.
+ */
+function restorePluginsAndRelaunch(): void {
+  restoreAll(safeModeStateFile(), dshHome(), webProfileDir())
+  appendFileSync(logFile(), `\n=== safe mode: all recovery actions restored, relaunching ===\n`)
+  quitting = true
+  tray?.destroy()
+  if (dshChild && dshChild.exitCode === null) dshChild.kill()
+  app.relaunch()
+  app.exit(0)
+}
+
+/**
+ * Boot the dsh server with the safe-mode recovery ladder: retry on failure,
+ * and when the loader's error names a plugin, offer to neutralize just that
+ * plugin before escalating to a full plugin-free boot. Throws only when the
+ * user declines recovery or every rung has been exhausted.
+ */
 async function boot(): Promise<void> {
-  const port = await pickPort()
-  serverPort = port
   presetBundledPlugins()
-  dshChild = startDsh(port)
-  await waitReady(port, dshChild)
-  mainWindow = createWindow(port)
-  createTray(port)
+  const tried = new Set<string>()
+  let attempt = 0
+  for (;;) {
+    attempt++
+    const port = await pickPort()
+    serverPort = port
+    dshChild = startDsh(port)
+    try {
+      await waitReady(port, dshChild)
+      mainWindow = createWindow(port)
+      createTray(port)
+      booted = true
+      if (attempt > 1) appendFileSync(logFile(), `\n=== boot succeeded after ${attempt - 1} failed attempt(s) ===\n`)
+      return
+    } catch (error) {
+      appendFileSync(
+        logFile(),
+        `\n=== boot attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)} ===\n`,
+      )
+      // A hung child (readiness timeout without exit) still holds its port.
+      if (dshChild.exitCode === null) dshChild.kill()
+      if (!(await proposeRecovery(attempt, tried))) throw error
+    }
+  }
 }
 
 const gotLock = app.requestSingleInstanceLock()
@@ -686,8 +866,8 @@ if (!gotLock) {
       await boot()
     } catch (error) {
       dialog.showErrorBox(
-        'DSH Desktop failed to start',
-        `${error instanceof Error ? error.message : String(error)}\n\nLog: ${logFile()}`,
+        'DSH Desktop 启动失败',
+        `${error instanceof Error ? error.message : String(error)}\n\n日志：${logFile()}`,
       )
       app.quit()
     }
@@ -701,9 +881,11 @@ if (!gotLock) {
   // The app lives in the tray once the window is closed; never quit just
   // because no window is open (issue #3).
   app.on('window-all-closed', () => {})
-  // macOS dock click while running in the tray reopens the window.
+  // macOS dock click while running in the tray reopens the window. Guarded
+  // by `booted`: macOS can fire activate during launch, and creating the
+  // window then would point it at a port the server hasn't bound yet.
   app.on('activate', () => {
-    if (serverPort && !mainWindow?.isVisible()) showWindow(serverPort)
+    if (booted && serverPort && !mainWindow?.isVisible()) showWindow(serverPort)
   })
   app.on('will-quit', () => {
     tray?.destroy()
