@@ -1,7 +1,10 @@
 /**
  * Sync-upstream entry for CI and `just sync`: polls npm for the latest
  * `@deepseek-ai/dsh`, and when it moved (or --force is passed) bumps the
- * dependency and computes the next desktop version.
+ * dependency and computes the next desktop version. CI also passes --force
+ * to rebuild the SAME upstream version when the repo itself changed since
+ * the last release tag, or when a tag was left without a release by a
+ * failed build.
  *
  * Desktop version scheme, designed to stay valid semver and strictly
  * increasing under electron-updater:
@@ -35,9 +38,23 @@ const PKG_PATH = join(ROOT, 'package.json')
 const UPSTREAM = '@deepseek-ai/dsh'
 const SCOPE = '@deepseek-ai'
 
-/** Latest published upstream version, straight from the npm registry. */
+/**
+ * Latest published upstream version, straight from the npm registry.
+ *
+ * Reads ALL dist-tags and takes the highest semver among them: upstream
+ * publishes each rc to `next` first and only moves it to `latest` later (or
+ * never), so `npm view version` — which reads `latest` only — misses fresh
+ * rc releases for days (rc.7 and rc.8 both went undetected this way).
+ */
 function upstreamLatest() {
-  return execFileSync('npm', ['view', UPSTREAM, 'version'], { encoding: 'utf8' }).trim()
+  const tags = JSON.parse(
+    execFileSync('npm', ['view', UPSTREAM, 'dist-tags', '--json'], { encoding: 'utf8' }),
+  )
+  const best = Object.values(tags)
+    .filter((v) => semver.valid(v))
+    .sort(semver.rcompare)[0]
+  if (!best) throw new Error(`no valid version in dist-tags of ${UPSTREAM}: ${JSON.stringify(tags)}`)
+  return best
 }
 
 /**
@@ -166,7 +183,8 @@ function main() {
   const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'))
   const latest = upstreamLatest()
   const pinned = pkg.dependencies[UPSTREAM]
-  const changed = force || pinned !== latest
+  const upstreamChanged = pinned !== latest
+  const changed = force || upstreamChanged
 
   if (!changed) {
     console.log(`upstream unchanged at ${latest}; nothing to do`)
@@ -183,8 +201,12 @@ function main() {
     console.log(`upstream ${pinned} -> ${latest}; desktop version -> ${version}`)
   }
 
+  // `changed` = a build is wanted (upstream moved, or --force from a
+  // repo-change / orphan-tag / manual rebuild); `upstream_changed` = the
+  // upstream dependency itself moved, which CI uses to word the commit.
   const outputs = {
     changed: String(changed),
+    upstream_changed: String(upstreamChanged),
     version: pkg.version,
     upstream_version: latest,
   }

@@ -1,10 +1,13 @@
 name: sync-and-release
 
-# Polls npm for a new @deepseek-ai/dsh release, and when one appears (or a
-# forced manual run asks for it) bumps the pinned dependency, tags a new
-# desktop version, and publishes signed-less macOS/Windows installers to
-# GitHub Releases. One workflow by design: a tag pushed with GITHUB_TOKEN
-# would not trigger a second workflow.
+# Polls npm for a new @deepseek-ai/dsh release and publishes signed-less
+# macOS/Windows installers to GitHub Releases. A build happens when ANY of:
+#   - upstream moved (any dist-tag carries a higher version than the pinned one)
+#   - the repo itself has commits since the last release tag
+#   - the latest tag was orphaned by a failed build (no release attached)
+#   - a manual run asks for it via the `force` input
+# One workflow by design: a tag pushed with GITHUB_TOKEN would not trigger a
+# second workflow.
 
 on:
   schedule:
@@ -33,6 +36,11 @@ jobs:
       upstream_version: ${{ steps.sync.outputs.upstream_version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history + tags: the repo-change check below diffs HEAD
+          # against the latest release tag.
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: pnpm/action-setup@v6
 
@@ -44,9 +52,28 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # A build is also wanted when the repo itself moved since the last
+          # release tag, or when a tag was orphaned by a failed build (its
+          # release never landed) — not only when upstream published something.
+          latest_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          repo_changed=false
+          orphan=false
+          if [ -z "$latest_tag" ]; then
+            repo_changed=true # no release tag yet
+          elif [ "$(git rev-list --count "${latest_tag}..HEAD")" -gt 0 ]; then
+            repo_changed=true
+          elif ! gh release view "$latest_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            orphan=true # tag was pushed but its build/release failed
+          fi
+          echo "latest_tag=${latest_tag:-<none>} repo_changed=$repo_changed orphan=$orphan"
+
           args=()
-          if [ "${{ inputs.force }}" = "true" ]; then args+=(--force); fi
+          if [ "${{ inputs.force }}" = "true" ] || [ "$repo_changed" = true ] || [ "$orphan" = true ]; then
+            args+=(--force)
+          fi
           node scripts/sync-upstream.mjs "${args[@]}"
 
       - name: Refresh lockfile for the new upstream version
@@ -58,8 +85,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.sync.outputs.upstream_changed }}" = "true" ]; then
+            msg="chore(sync): @deepseek-ai/dsh ${{ steps.sync.outputs.upstream_version }}"
+          else
+            msg="chore(release): rebuild @deepseek-ai/dsh ${{ steps.sync.outputs.upstream_version }}"
+          fi
           git add package.json pnpm-lock.yaml
-          git commit -m "chore(sync): @deepseek-ai/dsh ${{ steps.sync.outputs.upstream_version }}"
+          git commit -m "$msg"
           git tag "v${{ steps.sync.outputs.version }}"
           git push origin HEAD:master --tags
 

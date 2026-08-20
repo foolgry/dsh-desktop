@@ -20,7 +20,7 @@
 | 任务运行 | **just**（`justfile`） | 所有命令优先走 just |
 | 打包 | electron-builder 26 | dmg+zip（mac）、nsis（win） |
 | 自动更新 | electron-updater | 每 4 小时检查；Windows 后台下载后弹「重启更新」，macOS 未签名走 Homebrew（brew 安装时）或 Releases 页手动下载 |
-| 上游同步 | `scripts/sync-upstream.mjs` + GitHub Actions | 每天北京时间 09/13/17 点轮询 npm |
+| 上游同步 | `scripts/sync-upstream.mjs` + GitHub Actions | 每天北京时间 09/13/17 点轮询 npm（读全部 dist-tags 取最大 semver，上游 rc 先发 `next` 后挪 `latest`）；上游或本仓库任一有更新都会出包 |
 
 ## 常用命令
 
@@ -78,7 +78,7 @@ dist-installer/             # electron-builder 输出（gitignore）
 
 3. **peer-only 运行时依赖由脚本自动维护，不要手动删。** dsh 树里有些 `@deepseek-ai/*` 包只在 `peerDependencies` 中出现，而 electron-builder 的生产收集器（`nodeModulesCollector.isProdDependency`）**只读 `dependencies`/`optionalDependencies`**，会漏掉纯 peer 包。`sync-upstream.mjs` 的 `detectPeerOnlyRuntimeDeps()` 会在升版时把它们 pin 到 `dependencies`。设计上**只增不删**——即便某包后来变成真依赖，留着无害，删了反而可能因改名产生悬空引用。
 
-4. **`minimumReleaseAgeExclude` 必须保持 `'@deepseek-ai/*'` 通配，不要改成逐包 pin 版本。** pnpm 默认 24 小时最小发布龄检查，而本仓库就是要小时内跟进上游，所以整个第一方 scope 豁免。rc.6 时代这里曾是 ~190 行 `name@version` 列表，sync 升 rc.7 后列表过期、CI 的 `pnpm install --frozen-lockfile` 全部失败（ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION），且 **sync 已推 tag、build 失败后，后续定时 run 因上游无变化跳过 build，该 tag 永远不会出 release**——只能手动 `gh run rerun --failed` 或 force 重跑补救。
+4. **`minimumReleaseAgeExclude` 必须保持 `'@deepseek-ai/*'` 通配，不要改成逐包 pin 版本。** pnpm 默认 24 小时最小发布龄检查，而本仓库就是要小时内跟进上游，所以整个第一方 scope 豁免。rc.6 时代这里曾是 ~190 行 `name@version` 列表，sync 升 rc.7 后列表过期、CI 的 `pnpm install --frozen-lockfile` 全部失败（ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION）。**sync 已推 tag 但 build 失败会留下无 release 的孤儿 tag**——现在 CI 会检测「最新 tag 无对应 release」并自动 force 重建（见 CI 流程），不再需要手动 `gh run rerun --failed` 补救，但孤儿 tag 本身会留在 tag 列表里。
 
 5. **整个 `node_modules` 必须 `asarUnpack`。** `dsh web` 是子进程执行的入口路径，asar 归档内的路径无法被 spawn 执行，因此 `electron-builder.yml` 里 `asarUnpack: node_modules/**`。`dshBin()` 还会把 `app.asar` 路径重写为 `app.asar.unpacked`。
 
@@ -97,7 +97,7 @@ dist-installer/             # electron-builder 输出（gitignore）
 
 单 workflow 三阶段（刻意合并，避免 `GITHUB_TOKEN` 推 tag 触发第二个 workflow）：
 
-1. **sync**（ubuntu）：跑 sync 脚本；若 `changed=true`，刷新 lockfile → commit + tag `v<version>` → 推到 master。`workflow_dispatch` 支持 `force` 强制重建。
+1. **sync**（ubuntu）：先判定是否需要出包——① 上游有新版本（读全部 dist-tags 取最大 semver；**不能只看 `latest`**，上游 rc 先发 `next`、稳定后才挪 `latest`，rc.7/rc.8 都因此漏检过）；② 最新 release tag 之后本仓库又有新 commit；③ 最新 tag 无对应 release（build 失败留下的孤儿 tag）；④ 手动 `force`。任一命中即给脚本传 `--force`，脚本统一 bump 桌面版本（同上游重建会得到新时间戳版本，天然递增）；若 `changed=true`，刷新 lockfile → commit（上游升级与纯重建的 message 不同，靠脚本的 `upstream_changed` 输出区分）+ tag `v<version>` → 推到 master。sync job 的 checkout 必须 `fetch-depth: 0` + `fetch-tags: true`，否则 tag 差异比较无从谈起。
 2. **build**（macos-14 / windows-latest 并行）：checkout 对应 tag → `electron-builder --publish never` → 上传 artifact。
 3. **release**（ubuntu）：汇总双平台产物，`gh release create` 一次性发布（避免并行构建竞争同一 release）。
 
