@@ -27,6 +27,30 @@ brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desk
 
 SmartScreen 会提示风险——点 **更多信息 → 仍要运行**。
 
+### 下载慢或无法访问 GitHub？
+
+安装包托管在 GitHub Releases，直连慢或超时时，可以给下载链接加一个 GitHub 加速前缀（如 `https://ghfast.top/`），用浏览器或下载工具下载，例如：
+
+```text
+https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<版本>-mac-arm64.dmg
+```
+
+用 Homebrew 的话，可以把加速下载的安装包放进 brew 缓存，再正常安装/升级——brew 命中缓存会跳过下载，sha256 校验照常执行：
+
+```sh
+# 升级前先刷新 tap 元数据（数据量很小，一般可直连完成）
+brew update
+# 用加速前缀把安装包下载到 brew 期望的缓存路径（文件名以 Releases 最新版为准）
+curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
+  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<版本>-mac-arm64.dmg"
+# 正常安装/升级
+brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+```
+
+::: warning 第三方加速服务
+`ghfast.top`、`gh-proxy.com` 等加速域名是社区公共服务，会不定期更换或失效；不可用时换一个当时可用的 GitHub 加速前缀即可。安装包完整性由发布页的 `SHA256SUMS` 与 cask 内置的 sha256 校验保证，与下载途径无关。
+:::
+
 ## 更新
 
 应用启动后每 4 小时自动检查新版本：

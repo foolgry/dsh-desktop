@@ -27,6 +27,30 @@ Download `DSH-Desktop-*-win-x64-setup.exe`.
 
 SmartScreen will warn about risk — click **More info → Run anyway**.
 
+### Downloads are slow or GitHub is unreachable?
+
+Installers live on GitHub Releases. When a direct connection is slow or times out, prefix the download URL with a GitHub acceleration proxy (e.g. `https://ghfast.top/`) and download with your browser or a download manager:
+
+```text
+https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<version>-mac-arm64.dmg
+```
+
+Homebrew users can seed the brew cache with the accelerated download and then install/upgrade normally — brew skips the download on a cache hit and still verifies the sha256:
+
+```sh
+# Refresh tap metadata first (tiny; a direct connection usually suffices)
+brew update
+# Download the installer into brew's expected cache path (filename per the latest release)
+curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
+  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<version>-mac-arm64.dmg"
+# Install/upgrade as usual
+brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+```
+
+::: warning Third-party proxies
+Acceleration domains such as `ghfast.top` and `gh-proxy.com` are community services that come and go — if one is down, swap in whichever GitHub proxy prefix works at the time. Installer integrity is guaranteed by the release's `SHA256SUMS` and the cask's built-in sha256 check, regardless of how the bytes were fetched.
+:::
+
 ## Updates
 
 The app checks for new releases automatically every 4 hours after launch:

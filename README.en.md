@@ -22,6 +22,21 @@ Get the latest version from the [Releases](https://github.com/foolgry/dsh-deskto
 
 Every release ships a `SHA256SUMS` manifest for verifying installer integrity.
 
+<details>
+<summary><strong>Downloads are slow or GitHub is unreachable?</strong></summary>
+
+Prefix the download URL with a GitHub acceleration proxy (e.g. `https://ghfast.top/`) and download with your browser, or seed the brew cache and install normally — the sha256 check still applies:
+
+```sh
+curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
+  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<version>-mac-arm64.dmg"
+brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+```
+
+Acceleration domains are third-party community services that come and go — swap in whichever works at the time. Integrity is guaranteed by `SHA256SUMS` plus the cask's built-in sha256, regardless of how the bytes were fetched. See the [docs](https://foolgry.github.io/dsh-desktop/guide/getting-started.html) for details.
+
+</details>
+
 The app checks for updates automatically (every 4 hours) after launch, and you can trigger a check manually anytime: macOS menu bar "DSH Desktop → 检查更新…", Windows window menu (press Alt to reveal) "Help → Check for Updates…", or the tray icon's "Check for Updates…" item:
 
 - **Windows**: the update downloads in the background; click "Restart and update" in the dialog to apply it, or it is installed automatically the next time the app quits

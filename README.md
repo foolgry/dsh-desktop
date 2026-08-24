@@ -24,6 +24,21 @@ DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 N
 
 每个 Release 附带 `SHA256SUMS` 校验清单，可用于验证安装包完整性。
 
+<details>
+<summary><strong>下载慢或无法访问 GitHub？</strong></summary>
+
+可以给下载链接加一个 GitHub 加速前缀（如 `https://ghfast.top/`）用浏览器下载；Homebrew 用户可以经加速前缀把安装包下载到 brew 缓存后正常安装，sha256 校验照常执行：
+
+```sh
+curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
+  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<版本>-mac-arm64.dmg"
+brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+```
+
+加速域名是第三方公共服务，会不定期失效，换一个当时可用的即可；完整性与下载途径无关（`SHA256SUMS` + cask 内置 sha256 校验）。详见[文档站](https://foolgry.github.io/dsh-desktop/zh/guide/getting-started.html)。
+
+</details>
+
 应用启动时会自动检查更新（每 4 小时一次），也可以随时手动触发：macOS 点菜单栏「DSH Desktop → 检查更新…」，Windows 按 Alt 显示窗口菜单后点「帮助 → Check for Updates…」，或右键托盘图标选「检查更新…」：
 
 - **Windows**：后台自动下载，弹窗点「Restart and update」即重启完成更新；不点也会在下次退出应用时自动安装
