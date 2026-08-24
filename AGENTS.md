@@ -19,7 +19,7 @@
 | 包管理 | **pnpm 11.22.0**（hoisted 模式） | 见下方关键约束，**禁止用 npm**；版本须与 `@pnpm/exe` 对齐（约束 9） |
 | 任务运行 | **just**（`justfile`） | 所有命令优先走 just |
 | 打包 | electron-builder 26 | dmg+zip（mac）、nsis（win） |
-| 自动更新 | electron-updater | 每 4 小时检查；Windows 后台下载后弹「重启更新」，macOS 未签名走 Homebrew（brew 安装时）或 Releases 页手动下载 |
+| 自动更新 | electron-updater | 每 4 小时检查 + 菜单/托盘「检查更新…」手动触发；Windows 后台下载后弹「重启更新」，macOS 未签名走 Homebrew（brew 安装时）或 Releases 页手动下载 |
 | 上游同步 | `scripts/sync-upstream.mjs` + GitHub Actions | 每天北京时间 09/13/17 点轮询 npm（读全部 dist-tags 取最大 semver，上游 rc 先发 `next` 后挪 `latest`）；上游或本仓库任一有更新都会出包 |
 
 ## 常用命令
@@ -62,7 +62,7 @@ dist-installer/             # electron-builder 输出（gitignore）
 3. **`waitReady()`** — 每 500ms 轮询 `http://127.0.0.1:PORT/`，最多等 60s；期间若子进程提前退出则直接报错。**必须连续 3 次 OK 才算就绪**：`dsh web` 先绑端口再加载插件树，插件崩溃时服务器能短暂（~50ms）应答 200 再退出，单次 OK 会误判就绪、把窗口指向已死的服务器。
 4. **`createWindow()`** — 单个 BrowserWindow 加载本地 UI；导航守卫把任何非 `127.0.0.1` 的跳转交给系统浏览器。**点 × 不退出**：`close` 事件被拦截改为隐藏窗口，真实退出只有托盘菜单「Quit」/ Cmd+Q（`before-quit` 置 `quitting=true` 放行 close），`window-all-closed` 是空操作（issue #3 托盘驻留）。
 5. **`createTray()`** — 系统托盘图标（36px PNG 以 data URL 内嵌在 `main.ts`，因为 electron-builder 只打包 `dist/` 和 `node_modules/`；改图标需按 `TRAY_ICON_DATA_URL` 注释里的 magick 命令重新生成 base64，**不要手贴长 base64，容易丢字符导致图标空白**）。图标以 `addRepresentation({scaleFactor: 2})` 声明（36px = 18pt 逻辑尺寸），直接 `createFromDataURL` 的 1x 大图在 macOS 菜单栏会被裁剪显示为超大。macOS 上用 `setTemplateImage(true)` 渲染为自适应菜单栏明暗的单色剪影，Windows 保留彩色。左键/菜单「Show」恢复窗口，「Quit」才是真正退出，`will-quit` 里 kill dsh 子进程。
-6. **`setupAutoUpdate()`** — 仅在打包后运行。Windows：`autoDownload` 后台下载，`update-downloaded` 弹「Restart and update / Later」，确认后 `quitAndInstall(true, true)` 静默安装并重启；不点则下次退出时自动安装。macOS：未签名无法自我更新，`autoDownload` 关闭，`update-available` 直接弹窗——`isBrewManaged()` 检测到 `brew list --cask dsh-desktop` 成功（brew 路径硬编码 `/opt/homebrew` 与 `/usr/local`，GUI 应用没有 shell PATH）时提供「Update via Homebrew」：跑 `brew upgrade --cask dsh-desktop` → `xattr -cr <bundle>` → 手动 kill dsh 子进程后 `app.relaunch()` + `app.exit(0)`（`app.exit` 不触发 `will-quit`，必须自己清理）；否则按钮打开 Releases 页。`error` 弹窗只在下载失败时出现（`downloadInFlight` 门控），网络抖动只记日志；`promptedVersion` 防止每 4 小时重复弹同一版本。
+6. **`setupAutoUpdate()`** — 仅在打包后运行。Windows：`autoDownload` 后台下载，`update-downloaded` 弹「Restart and update / Later」，确认后 `quitAndInstall(true, true)` 静默安装并重启；不点则下次退出时自动安装。macOS：未签名无法自我更新，`autoDownload` 关闭，`update-available` 直接弹窗——`isBrewManaged()` 检测到 `brew list --cask dsh-desktop` 成功（brew 路径硬编码 `/opt/homebrew` 与 `/usr/local`，GUI 应用没有 shell PATH）时提供「Update via Homebrew」：跑 `brew upgrade --cask dsh-desktop` → `xattr -cr <bundle>` → 手动 kill dsh 子进程后 `app.relaunch()` + `app.exit(0)`（`app.exit` 不触发 `will-quit`，必须自己清理）；否则按钮打开 Releases 页。`error` 弹窗只在下载失败时出现（`downloadInFlight` 门控），网络抖动只记日志；`promptedVersion` 防止每 4 小时重复弹同一版本。**手动检查更新**（`manualUpdateCheck()`，挂在 macOS 应用菜单 / Windows「帮助」菜单 / 托盘菜单的「检查更新…」）会清空 `promptedVersion` 强制重弹，并在无更新时报「已是最新」、失败时报错。**brew 子进程走 `systemProxyEnv()`**：GUI 启动没有 shell 环境变量，brew/curl 直连 GitHub 资产 CDN 在代理网络下会 curl(56) 超时，所以用 `scutil --proxy` 读系统代理翻译成 `HTTPS_PROXY`/`ALL_PROXY` 传给子进程；electron-updater 自身的检查走 Electron net（Chromium 网络栈自动认系统代理），不需要这步。**导入 electron-updater 必须从 `default` 解包**：它是 CJS 包且 `autoUpdater` 用 `Object.defineProperty` getter 导出，cjs-module-lexer 识别不到，NodeNext ESM 下命名解构拿到的是 undefined（这个 bug 曾让全量用户的自动更新静默失效，接线失败要记日志）。
 
 子进程的 stdout/stderr 全部追加到 `userData/logs/dsh.log`，这是排查「应用打不开 / UI 白屏」的首要入口。
 
@@ -87,7 +87,7 @@ dist-installer/             # electron-builder 输出（gitignore）
    - 上游稳定版（如 `0.1.0`）→ 独立 patch 线 `X.Y.(Z+1)`
    - 保证严格递增且合法 semver（electron-updater 要求）
 
-7. **macOS 构建未签名 / 未公证。** CI 里 `CSC_IDENTITY_AUTO_DISCOVERY=false`。用户首次打开需右键 → 打开；若提示「已损坏」需 `xattr -cr "/Applications/DSH Desktop.app"`。Homebrew 渠道由独立仓库 [foolgry/homebrew-tap](https://github.com/foolgry/homebrew-tap) 提供（cask `dsh-desktop`，仅 arm64），其 `sync-cask.yml` 每天跟踪本仓库最新 release 自动更新版本与 sha256——**发布产物文件名（`DSH.Desktop-<version>-mac-arm64.dmg`）变动时必须同步改 cask 的 `url`**。
+7. **macOS 构建未签名 / 未公证。** CI 里 `CSC_IDENTITY_AUTO_DISCOVERY=false`。用户首次打开需右键 → 打开；若提示「已损坏」需 `xattr -cr "/Applications/DSH Desktop.app"`。Homebrew 渠道由独立仓库 [foolgry/homebrew-tap](https://github.com/foolgry/homebrew-tap) 提供（cask `dsh-desktop`，仅 arm64），其 `sync-cask.yml` 每天跟踪本仓库最新 release 自动更新版本与 sha256——**发布产物文件名（`DSH-Desktop-<version>-mac-arm64.dmg`）变动时必须同步改 cask 的 `url`**。产物文件名必须不含空格：`${productName}` 里的空格会让 electron-builder 往 latest.yml 写连字符化的 safeArtifactName，而 `gh release` 上传又把空格转成点号，二者不一致时更新下载必 404。
 
 8. **ESM 项目，导入用 NodeNext 风格。** 例如 `.mjs` 脚本里用 `import.meta.url` + `createRequire`。`@deepseek-ai/dsh` 无 `exports` map，`dshBin()` 直接 `require.resolve('@deepseek-ai/dsh/lib/bin.js')`。
 

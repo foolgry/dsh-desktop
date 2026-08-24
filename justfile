@@ -27,6 +27,10 @@ dist-win:
 sync:
     node scripts/sync-upstream.mjs
 
+# Boot the pinned dsh web from node_modules and probe readiness (CI smoke test)
+smoke:
+    node scripts/ci-smoke.mjs
+
 # Start the docs dev server (VitePress) at http://localhost:5173
 docs:
     pnpm docs:dev

@@ -20,7 +20,9 @@ Get the latest version from the [Releases](https://github.com/foolgry/dsh-deskto
 - **Windows (64-bit)**: download `DSH-Desktop-*-win-x64-setup.exe`
   - SmartScreen will warn about risk: click **More info → Run anyway**
 
-The app checks for updates automatically (every 4 hours) after launch:
+Every release ships a `SHA256SUMS` manifest for verifying installer integrity.
+
+The app checks for updates automatically (every 4 hours) after launch, and you can trigger a check manually anytime: macOS menu bar "DSH Desktop → 检查更新…", Windows window menu (press Alt to reveal) "Help → Check for Updates…", or the tray icon's "Check for Updates…" item:
 
 - **Windows**: the update downloads in the background; click "Restart and update" in the dialog to apply it, or it is installed automatically the next time the app quits
 - **macOS** (unsigned, so it cannot update itself): a dialog announces the new version. If the app was installed via Homebrew, "Update via Homebrew" runs `brew upgrade --cask dsh-desktop` + `xattr -cr` for you and restarts the app; otherwise a button opens the Releases page for a manual download
@@ -31,7 +33,7 @@ The app checks for updates automatically (every 4 hours) after launch:
 2. Enter your [DeepSeek API Key](https://platform.deepseek.com/) in the settings of the interface (same as the web version)
 3. Start a conversation and let the AI complete tasks for you
 
-Your data (conversations, configuration, sessions) is stored in the system application data directory and does not pollute your user directory. Logs are in `logs/dsh.log` under the same directory.
+Your data (conversations, configuration, sessions) is stored in the system application data directory and does not pollute your user directory. Logs are in `logs/dsh.log` under the same directory; both the log and the data directory are reachable from the tray menu.
 
 ## How it works
 
@@ -39,6 +41,17 @@ Your data (conversations, configuration, sessions) is stored in the system appli
 - On startup it launches a `dsh web` service on the loopback address (port 3080 by default; if occupied, it automatically tries 3081, 3082…), listening only on `127.0.0.1` and never exposed externally
 - A native window loads this interface, giving an experience consistent with a desktop app
 - **Closing the window does not quit the app**: the × button minimizes to the system tray and running tasks continue in the background; click the tray icon (or "Show DSH Desktop" in its menu) to reopen the window, and use the tray menu's "Quit" (or Cmd+Q on macOS) to exit completely
+
+## What we deliberately don't do
+
+Scope is a feature. This project stays a minimal desktop shell around the official UI:
+
+- **No fork, no patched upstream**: it always runs the officially published `@deepseek-ai/dsh` and follows new releases daily — you get exactly the same, latest official capability that CLI users get, not a repackaged fork that slowly rots
+- **No UI rework**: the window shows the official Web UI untouched. Skins, terminals, sidebars and other enhancements belong to the plugin ecosystem (a marketplace is built in) — you choose what to install; the shell doesn't decide for you
+- **Nothing installed on your system**: no Node, no PATH edits, no system config; everything lives in the app's own data directory and is gone when you uninstall
+- **No version pinning**: there is no "stay on an old release" option. If an upstream release misbehaves, a fixed build usually lands within a day; the CLI is the interim fallback
+
+If you want a built-in terminal, skins, or multi-version management, heavier community clients exist (e.g. [EAC](https://github.com/zouyuxuan122/Deepseek-Harness-EAC), [anywhere-labs' DSH Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop)) — different trade-offs, pick what fits.
 
 ## Automatic sync and packaging
 

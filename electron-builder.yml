@@ -21,13 +21,16 @@ mac:
   target:
     - dmg
     - zip # required by electron-updater on macOS
-  artifactName: ${productName}-${version}-mac-arm64.${ext}
+  # No ${productName} here: the space in "DSH Desktop" makes electron-builder
+  # write a dashed safeArtifactName into latest-mac.yml while gh release upload
+  # turns the space into a dot — the updater's download URL then 404s.
+  artifactName: DSH-Desktop-${version}-mac-arm64.${ext}
 
 win:
   icon: build/icon.ico
   target:
     - nsis
-  artifactName: ${productName}-${version}-win-x64-setup.${ext}
+  artifactName: DSH-Desktop-${version}-win-x64-setup.${ext}
 
 nsis:
   oneClick: false

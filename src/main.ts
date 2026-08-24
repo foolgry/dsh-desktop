@@ -6,9 +6,11 @@
  * @module dsh-desktop/main
  */
 
-import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, screen, shell } from 'electron'
 import type { ChildProcess } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
+import type { Rectangle } from 'electron'
+import type { AppUpdater } from 'electron-updater'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
@@ -350,6 +352,9 @@ function startDsh(port: number): ChildProcess {
   // --expose-internals is required by cordis-plugin-hmr's HMR service, which
   // ships in the base profile and reads Node internals unavailable by default.
   const args = ['--expose-internals', dshBin(), 'web']
+  // The shell loads the UI in its own window; dsh's default behavior of
+  // opening the system browser on top of that is a redundant tab per launch.
+  args.push('--no-open')
   // win32: the native folder dialog's koffi.node crashes under Electron's ABI
   // (issue #1), so overlay the pure-JS browse picker instead. --patch must
   // come BEFORE --port: the web subcommand uses enablePositionalOptions() with
@@ -424,14 +429,71 @@ function devIcon(): Electron.NativeImage | undefined {
   return existsSync(file) ? nativeImage.createFromPath(file) : undefined
 }
 
+/** Persisted window geometry, restored on the next launch. */
+interface WindowState {
+  x: number
+  y: number
+  width: number
+  height: number
+  maximized: boolean
+}
+
+function windowStateFile(): string {
+  return join(app.getPath('userData'), 'window-state.json')
+}
+
+/**
+ * Read the last saved window geometry. A state is only honored when it is
+ * plausibly sized and at least partially intersects some display's work area —
+ * a window saved on a now-unplugged external monitor would otherwise restore
+ * off-screen where the user cannot grab it.
+ */
+function loadWindowState(): WindowState | undefined {
+  try {
+    const saved = JSON.parse(readFileSync(windowStateFile(), 'utf8')) as Partial<WindowState>
+    if (typeof saved.x !== 'number' || typeof saved.y !== 'number') return undefined
+    if (typeof saved.width !== 'number' || typeof saved.height !== 'number') return undefined
+    if (saved.width < 800 || saved.height < 600) return undefined
+    const area = screen.getDisplayMatching(saved as Rectangle).workArea
+    const visible =
+      saved.x < area.x + area.width &&
+      saved.y < area.y + area.height &&
+      saved.x + saved.width > area.x &&
+      saved.y + saved.height > area.y
+    if (!visible) return undefined
+    return {
+      x: saved.x,
+      y: saved.y,
+      width: saved.width,
+      height: saved.height,
+      maximized: saved.maximized === true,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/** Save the window's normal (non-maximized) geometry. Never throws. */
+function saveWindowState(win: BrowserWindow): void {
+  try {
+    const bounds = win.getNormalBounds()
+    const state: WindowState = { ...bounds, maximized: win.isMaximized() }
+    writeFileSync(windowStateFile(), JSON.stringify(state) + '\n')
+  } catch {
+    // non-fatal: a lost geometry falls back to the default on next launch
+  }
+}
+
 /**
  * Create the single application window pointed at the local server.
  * @param port - port the server bound
  */
 function createWindow(port: number): BrowserWindow {
+  const saved = loadWindowState()
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: saved?.width ?? 1280,
+    height: saved?.height ?? 800,
+    ...(saved === undefined ? {} : { x: saved.x, y: saved.y }),
     minWidth: 800,
     minHeight: 600,
     title: 'DSH Desktop',
@@ -440,6 +502,19 @@ function createWindow(port: number): BrowserWindow {
     // separately at startup).
     icon: devIcon(),
   })
+  if (saved?.maximized) win.maximize()
+  // Persist geometry (debounced — resize/move fire in bursts) so the next
+  // launch reopens where the user left it.
+  let saveTimer: NodeJS.Timeout | undefined
+  const persist = (): void => {
+    if (saveTimer !== undefined) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      saveTimer = undefined
+      if (!win.isDestroyed()) saveWindowState(win)
+    }, 300)
+  }
+  win.on('resize', persist)
+  win.on('move', persist)
   // Closing the window hides it to the tray instead of quitting, so long
   // agent tasks keep running in the background (issue #3). Real exit only
   // happens via the tray menu / Cmd+Q, which flips `quitting` first.
@@ -479,6 +554,50 @@ function showWindow(port: number): void {
   mainWindow.focus()
 }
 
+/** Splash shown from app-ready until the dsh server answers; without it the
+ * dock icon appears but nothing responds for the whole boot (worst case:
+ * minutes of silent safe-mode retries). */
+let splashWindow: BrowserWindow | undefined
+
+/**
+ * Small frameless "starting" window. The dsh child may legitimately take tens
+ * of seconds (plugin tree, cold disk, recovery retries); this keeps the app
+ * visibly alive until the real window can load a live server.
+ */
+function createSplash(): void {
+  const zh = app.getLocale().startsWith('zh')
+  const text = zh ? '正在启动 DSH Desktop…' : 'Starting DSH Desktop…'
+  const hint = zh ? '首次启动或插件较多时需要一点时间' : 'First launch or many plugins can take a moment'
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;
+background:#fff;color:#333;font:14px -apple-system,"Segoe UI",sans-serif;user-select:none}
+@media (prefers-color-scheme:dark){html,body{background:#1e1e1e;color:#ddd}}
+.wrap{text-align:center;line-height:1.8}
+.spin{width:28px;height:28px;margin:0 auto 14px;border:3px solid #4d6bfe33;
+border-top-color:#4d6bfe;border-radius:50%;animation:r .9s linear infinite}
+@keyframes r{to{transform:rotate(360deg)}}
+small{font-size:12px;opacity:.55}
+</style></head><body><div class="wrap"><div class="spin"></div>${text}<br><small>${hint}</small></div></body></html>`
+  splashWindow = new BrowserWindow({
+    width: 360,
+    height: 200,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    frame: false,
+    title: 'DSH Desktop',
+    icon: devIcon(),
+  })
+  void splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+}
+
+/** Tear the splash down once its job (covering the boot) is done. */
+function destroySplash(): void {
+  splashWindow?.destroy()
+  splashWindow = undefined
+}
+
 /**
  * Create the system-tray icon with a show/quit menu. The tray owns the app
  * lifecycle once the window is hidden: left-click restores the window,
@@ -497,22 +616,33 @@ function createTray(port: number): void {
   if (process.platform === 'darwin') icon.setTemplateImage(true)
   tray = new Tray(icon)
   tray.setToolTip('DSH Desktop')
+  // Menu labels follow the OS locale; the rest of the app's dialogs remain
+  // Chinese-first for now.
+  const zh = app.getLocale().startsWith('zh')
+  const labels = zh
+    ? { show: '显示 DSH Desktop', update: '检查更新…', logs: '打开日志', data: '打开数据目录', restore: '恢复被禁用的插件并重启', quit: '退出 DSH Desktop' }
+    : { show: 'Show DSH Desktop', update: 'Check for Updates…', logs: 'Open log', data: 'Open data folder', restore: 'Restore disabled plugins and restart', quit: 'Quit DSH Desktop' }
   // Recovery actions survive the crash that triggered them, so the restore
   // item is offered whenever the record is non-empty — not only right after
   // a safe-mode boot.
   const recovery = loadRecoveryActions(safeModeStateFile()).length > 0
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '显示 DSH Desktop', click: () => showWindow(port) },
+      { label: labels.show, click: () => showWindow(port) },
+      { label: labels.update, click: () => void manualUpdateCheck() },
+      // Troubleshooting entries: the log is the first place to look when the
+      // UI misbehaves, and the data dir holds profiles/sessions/plugins.
+      { label: labels.logs, click: () => shell.showItemInFolder(logFile()) },
+      { label: labels.data, click: () => void shell.openPath(dshHome()) },
       ...(recovery
         ? ([
             { type: 'separator' },
-            { label: '恢复被禁用的插件并重启', click: () => restorePluginsAndRelaunch() },
+            { label: labels.restore, click: () => restorePluginsAndRelaunch() },
           ] as const)
         : []),
       { type: 'separator' },
       {
-        label: '退出 DSH Desktop',
+        label: labels.quit,
         click: () => {
           quitting = true
           app.quit()
@@ -550,11 +680,41 @@ function appBundlePath(): string {
   return idx === -1 ? process.execPath : process.execPath.slice(0, idx + marker.length - 1)
 }
 
+/**
+ * Proxy environment for update subprocesses. GUI launches inherit a bare
+ * launchd env with no proxy variables, so brew/curl go direct to GitHub's
+ * asset CDN — which for users behind a proxy crawls and then dies with
+ * curl(56). Read macOS's system proxy via scutil and translate it into the
+ * standard *_PROXY variables brew and curl honor.
+ */
+function systemProxyEnv(): NodeJS.ProcessEnv {
+  if (process.platform !== 'darwin') return {}
+  try {
+    const out = spawnSync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8' }).stdout ?? ''
+    const get = (key: string): string | undefined =>
+      out.match(new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)`, 'm'))?.[1]
+    if (get('HTTPSEnable') === '1' && get('HTTPSProxy') !== undefined) {
+      const server = `http://${get('HTTPSProxy')}:${get('HTTPSPort') ?? '443'}`
+      return { HTTPS_PROXY: server, HTTP_PROXY: server, ALL_PROXY: server }
+    }
+    if (get('HTTPEnable') === '1' && get('HTTPProxy') !== undefined) {
+      const server = `http://${get('HTTPProxy')}:${get('HTTPPort') ?? '80'}`
+      return { HTTPS_PROXY: server, HTTP_PROXY: server, ALL_PROXY: server }
+    }
+    if (get('SOCKSEnable') === '1' && get('SOCKSProxy') !== undefined) {
+      return { ALL_PROXY: `socks5://${get('SOCKSProxy')}:${get('SOCKSPort') ?? '1080'}` }
+    }
+  } catch {
+    // no proxy info readable; fall back to a direct connection
+  }
+  return {}
+}
+
 /** Run a command with output appended to the dsh log; resolves the exit code. */
 function runLogged(command: string, args: string[]): Promise<number | null> {
   return new Promise((resolve) => {
     appendFileSync(logFile(), `\n=== update: ${command} ${args.join(' ')} ===\n`)
-    const child = spawn(command, args)
+    const child = spawn(command, args, { env: { ...process.env, ...systemProxyEnv() } })
     child.stdout?.on('data', (chunk: Buffer) => appendFileSync(logFile(), chunk))
     child.stderr?.on('data', (chunk: Buffer) => appendFileSync(logFile(), chunk))
     child.on('error', () => resolve(null))
@@ -625,6 +785,113 @@ let promptedVersion: string | undefined
 /** Set once a background download starts; gates the error dialog to real
  * download failures instead of transient network errors from checkForUpdates. */
 let downloadInFlight = false
+/** The wired updater, set once the dynamic import in setupAutoUpdate lands. */
+let updater: AppUpdater | undefined
+/** Re-entrancy guard for the menu-triggered check; also routes the outcome. */
+let manualCheckInFlight = false
+/** Whether the in-flight manual check found an update (set by the event). */
+let manualSawUpdate = false
+
+/**
+ * Menu/tray-triggered update check. Unlike the silent 4-hourly poll, a manual
+ * click always reports back: re-prompts even for an already-nagged version,
+ * says so when already current, and surfaces network failures.
+ */
+async function manualUpdateCheck(): Promise<void> {
+  if (manualCheckInFlight) return
+  const zh = app.getLocale().startsWith('zh')
+  if (!app.isPackaged || !updater) {
+    await dialog.showMessageBox({
+      type: 'info',
+      title: zh ? '检查更新' : 'Check for Updates',
+      message: zh ? '开发模式不检查更新。' : 'Update checks are disabled in development mode.',
+    })
+    return
+  }
+  manualCheckInFlight = true
+  manualSawUpdate = false
+  promptedVersion = undefined
+  try {
+    await updater.checkForUpdates()
+  } catch {
+    // the error event already logged the detail
+    await dialog.showMessageBox({
+      type: 'error',
+      title: zh ? '检查更新失败' : 'Update Check Failed',
+      message: zh ? '无法连接到更新服务器，请检查网络后重试。' : 'Could not reach the update server. Check your network and retry.',
+    })
+    return
+  } finally {
+    manualCheckInFlight = false
+  }
+  if (manualSawUpdate) {
+    // macOS already shows its prompt from the update-available handler.
+    if (process.platform !== 'darwin') {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: zh ? '发现新版本' : 'Update Available',
+        message: zh ? '发现新版本，正在后台下载，完成后会提示你重启。' : 'A new version is downloading in the background; you will be prompted to restart.',
+      })
+    }
+    return
+  }
+  await dialog.showMessageBox({
+    type: 'info',
+    title: zh ? '检查更新' : 'Check for Updates',
+    message: zh ? `当前已是最新版本（${app.getVersion()}）。` : `You are on the latest version (${app.getVersion()}).`,
+  })
+}
+
+/**
+ * Application menu with a manual "Check for Updates" entry. Kept role-based
+ * so the standard items (especially Edit's copy/paste for the web UI) survive.
+ */
+function setupAppMenu(): void {
+  const zh = app.getLocale().startsWith('zh')
+  const checkItem: Electron.MenuItemConstructorOptions = {
+    label: zh ? '检查更新…' : 'Check for Updates…',
+    click: () => void manualUpdateCheck(),
+  }
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate([
+        {
+          label: app.name,
+          submenu: [
+            { role: 'about' as const },
+            { type: 'separator' as const },
+            checkItem,
+            { type: 'separator' as const },
+            { role: 'services' as const },
+            { type: 'separator' as const },
+            { role: 'hide' as const },
+            { role: 'hideOthers' as const },
+            { role: 'unhide' as const },
+            { type: 'separator' as const },
+            { role: 'quit' as const },
+          ],
+        },
+        { role: 'fileMenu' },
+        { role: 'editMenu' },
+        { role: 'viewMenu' },
+        { role: 'windowMenu' },
+      ]),
+    )
+    return
+  }
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      { role: 'fileMenu' },
+      { role: 'editMenu' },
+      { role: 'viewMenu' },
+      { role: 'windowMenu' },
+      {
+        label: zh ? '帮助' : 'Help',
+        submenu: [checkItem, { type: 'separator' as const }, { role: 'about' as const }],
+      },
+    ]),
+  )
+}
 
 /**
  * Wire electron-updater: check on start and then every 4 hours. Windows
@@ -634,9 +901,15 @@ let downloadInFlight = false
  */
 function setupAutoUpdate(): void {
   if (!app.isPackaged) return
-  void import('electron-updater').then(({ autoUpdater }) => {
+  // electron-updater is CJS and exposes autoUpdater via an Object.defineProperty
+  // getter, which cjs-module-lexer cannot see — under NodeNext ESM the named
+  // import is undefined and only `default` (module.exports) carries it.
+  void import('electron-updater').then((mod) => {
+    const { autoUpdater } = (mod as unknown as { default?: typeof mod }).default ?? mod
+    updater = autoUpdater
     autoUpdater.autoDownload = process.platform !== 'darwin'
     autoUpdater.on('update-available', (info) => {
+      if (manualCheckInFlight) manualSawUpdate = true
       if (process.platform === 'darwin') {
         if (info.version === promptedVersion) return
         promptedVersion = info.version
@@ -682,6 +955,8 @@ function setupAutoUpdate(): void {
     }
     check()
     setInterval(check, 4 * 60 * 60 * 1000)
+  }).catch((error: Error) => {
+    appendFileSync(logFile(), `\n=== auto-update setup failed: ${error.message} ===\n`)
   })
 }
 
@@ -826,6 +1101,7 @@ async function boot(): Promise<void> {
     dshChild = startDsh(port)
     try {
       await waitReady(port, dshChild)
+      destroySplash()
       mainWindow = createWindow(port)
       createTray(port)
       booted = true
@@ -861,10 +1137,13 @@ if (!gotLock) {
     // Dev mode only: replace Electron's default dock icon with the whale.
     const icon = devIcon()
     if (icon && process.platform === 'darwin') app.dock?.setIcon(icon)
+    setupAppMenu()
     setupAutoUpdate()
+    createSplash()
     try {
       await boot()
     } catch (error) {
+      destroySplash()
       dialog.showErrorBox(
         'DSH Desktop 启动失败',
         `${error instanceof Error ? error.message : String(error)}\n\n日志：${logFile()}`,
@@ -877,6 +1156,9 @@ if (!gotLock) {
   // the window's close handler lets the window actually close.
   app.on('before-quit', () => {
     quitting = true
+    // Flush any debounced geometry save: quitting from a visible window never
+    // passes through the close handler that normally persists it.
+    if (mainWindow && !mainWindow.isDestroyed()) saveWindowState(mainWindow)
   })
   // The app lives in the tray once the window is closed; never quit just
   // because no window is open (issue #3).

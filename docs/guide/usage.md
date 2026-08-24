@@ -16,4 +16,4 @@ Ask the AI to run tasks for you: read/write files, execute commands, write code,
 
 Conversations, configuration, and sessions are stored in the system application data directory — they never pollute your user home. Diagnostic logs are written to `logs/dsh.log` under that same directory.
 
-If the app ever fails to open or the UI stays blank, that log file is the first place to look.
+If the app ever fails to open or the UI stays blank, that log file is the first place to look — the tray menu's "Open log" and "Open data directory" entries take you straight to both locations.

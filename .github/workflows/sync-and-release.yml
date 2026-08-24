@@ -123,6 +123,9 @@ jobs:
 
       - run: pnpm run build
 
+      - name: Smoke-test the pinned upstream (boot dsh web, probe readiness)
+        run: node scripts/ci-smoke.mjs
+
       - name: Build installer (no publish — release is assembled below to avoid
           parallel-build race on the same tag)
         run: pnpm exec electron-builder ${{ matrix.builder-flag }} --publish never
@@ -154,7 +157,11 @@ jobs:
 
       - name: Create published release with all installers
         run: |
+          # Checksum manifest: lets users verify downloads against the
+          # release assets themselves.
+          (cd artifacts && find . -type f | sed 's|^\./||' | sort | xargs shasum -a 256) > SHA256SUMS
           mapfile -t files < <(find artifacts -type f | sort)
+          files+=("SHA256SUMS")
           cat > notes.md <<'EOF'
           **English**
 
