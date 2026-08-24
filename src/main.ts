@@ -36,6 +36,16 @@ const READY_TIMEOUT_MS = 60_000
 const RELEASES_URL = 'https://github.com/foolgry/dsh-desktop/releases'
 
 /**
+ * UI locale switch: the shell ships Chinese + English strings; every other
+ * locale falls back to English. Computed lazily so callers before app-ready
+ * still work (getLocale only becomes reliable once the app module loads).
+ */
+let zhLocale: boolean | undefined
+function isZhLocale(): boolean {
+  return (zhLocale ??= app.getLocale().startsWith('zh'))
+}
+
+/**
  * 36×36 tray icon (whale with padding), embedded as a data URL
  * so the packaged app needs no extra resource files — electron-builder only
  * ships `dist/` and `node_modules/`. Regenerate from `build/icon.png` with:
@@ -565,7 +575,7 @@ let splashWindow: BrowserWindow | undefined
  * visibly alive until the real window can load a live server.
  */
 function createSplash(): void {
-  const zh = app.getLocale().startsWith('zh')
+  const zh = isZhLocale()
   const text = zh ? '正在启动 DSH Desktop…' : 'Starting DSH Desktop…'
   const hint = zh ? '首次启动或插件较多时需要一点时间' : 'First launch or many plugins can take a moment'
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -618,7 +628,7 @@ function createTray(port: number): void {
   tray.setToolTip('DSH Desktop')
   // Menu labels follow the OS locale; the rest of the app's dialogs remain
   // Chinese-first for now.
-  const zh = app.getLocale().startsWith('zh')
+  const zh = isZhLocale()
   const labels = zh
     ? { show: '显示 DSH Desktop', update: '检查更新…', logs: '打开日志', data: '打开数据目录', restore: '恢复被禁用的插件并重启', quit: '退出 DSH Desktop' }
     : { show: 'Show DSH Desktop', update: 'Check for Updates…', logs: 'Open log', data: 'Open data folder', restore: 'Restore disabled plugins and restart', quit: 'Quit DSH Desktop' }
@@ -799,7 +809,7 @@ let manualSawUpdate = false
  */
 async function manualUpdateCheck(): Promise<void> {
   if (manualCheckInFlight) return
-  const zh = app.getLocale().startsWith('zh')
+  const zh = isZhLocale()
   if (!app.isPackaged || !updater) {
     await dialog.showMessageBox({
       type: 'info',
@@ -843,14 +853,57 @@ async function manualUpdateCheck(): Promise<void> {
 }
 
 /**
- * Application menu with a manual "Check for Updates" entry. Kept role-based
- * so the standard items (especially Edit's copy/paste for the web UI) survive.
+ * Application menu with a manual "Check for Updates" entry. Every visible
+ * label is set explicitly — Electron's composite roles (fileMenu/editMenu/…)
+ * hardcode English labels, which left the menu mixed-language next to the
+ * localized tray. Roles stay attached so behaviors and accelerators (macOS
+ * copy/paste especially) keep working.
  */
 function setupAppMenu(): void {
-  const zh = app.getLocale().startsWith('zh')
+  const zh = isZhLocale()
+  const t = zh
+    ? {
+        about: '关于 DSH Desktop', services: '服务', hide: '隐藏 DSH Desktop', hideOthers: '隐藏其他', unhide: '显示全部',
+        quit: '退出 DSH Desktop', file: '文件', close: '关闭窗口',
+        edit: '编辑', undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
+        view: '查看', reload: '重新加载', devtools: '切换开发者工具', resetZoom: '实际大小', zoomIn: '放大', zoomOut: '缩小', fullscreen: '切换全屏',
+        window: '窗口', minimize: '最小化', zoom: '缩放', help: '帮助',
+      }
+    : {
+        about: 'About DSH Desktop', services: 'Services', hide: 'Hide DSH Desktop', hideOthers: 'Hide Others', unhide: 'Show All',
+        quit: 'Quit DSH Desktop', file: 'File', close: 'Close Window',
+        edit: 'Edit', undo: 'Undo', redo: 'Redo', cut: 'Cut', copy: 'Copy', paste: 'Paste', selectAll: 'Select All',
+        view: 'View', reload: 'Reload', devtools: 'Toggle Developer Tools', resetZoom: 'Actual Size', zoomIn: 'Zoom In', zoomOut: 'Zoom Out', fullscreen: 'Toggle Full Screen',
+        window: 'Window', minimize: 'Minimize', zoom: 'Zoom', help: 'Help',
+      }
   const checkItem: Electron.MenuItemConstructorOptions = {
     label: zh ? '检查更新…' : 'Check for Updates…',
     click: () => void manualUpdateCheck(),
+  }
+  const editMenu: Electron.MenuItemConstructorOptions = {
+    label: t.edit,
+    submenu: [
+      { role: 'undo', label: t.undo },
+      { role: 'redo', label: t.redo },
+      { type: 'separator' },
+      { role: 'cut', label: t.cut },
+      { role: 'copy', label: t.copy },
+      { role: 'paste', label: t.paste },
+      { role: 'selectAll', label: t.selectAll },
+    ],
+  }
+  const viewMenu: Electron.MenuItemConstructorOptions = {
+    label: t.view,
+    submenu: [
+      { role: 'reload', label: t.reload },
+      { role: 'toggleDevTools', label: t.devtools },
+      { type: 'separator' },
+      { role: 'resetZoom', label: t.resetZoom },
+      { role: 'zoomIn', label: t.zoomIn },
+      { role: 'zoomOut', label: t.zoomOut },
+      { type: 'separator' },
+      { role: 'togglefullscreen', label: t.fullscreen },
+    ],
   }
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(
@@ -858,36 +911,41 @@ function setupAppMenu(): void {
         {
           label: app.name,
           submenu: [
-            { role: 'about' as const },
-            { type: 'separator' as const },
+            { role: 'about', label: t.about },
+            { type: 'separator' },
             checkItem,
-            { type: 'separator' as const },
-            { role: 'services' as const },
-            { type: 'separator' as const },
-            { role: 'hide' as const },
-            { role: 'hideOthers' as const },
-            { role: 'unhide' as const },
-            { type: 'separator' as const },
-            { role: 'quit' as const },
+            { type: 'separator' },
+            { role: 'services', label: t.services },
+            { type: 'separator' },
+            { role: 'hide', label: t.hide },
+            { role: 'hideOthers', label: t.hideOthers },
+            { role: 'unhide', label: t.unhide },
+            { type: 'separator' },
+            { role: 'quit', label: t.quit },
           ],
         },
-        { role: 'fileMenu' },
-        { role: 'editMenu' },
-        { role: 'viewMenu' },
-        { role: 'windowMenu' },
+        { label: t.file, submenu: [{ role: 'close', label: t.close }] },
+        editMenu,
+        viewMenu,
+        {
+          label: t.window,
+          submenu: [
+            { role: 'minimize', label: t.minimize },
+            { role: 'zoom', label: t.zoom },
+          ],
+        },
       ]),
     )
     return
   }
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { role: 'fileMenu' },
-      { role: 'editMenu' },
-      { role: 'viewMenu' },
-      { role: 'windowMenu' },
+      { label: t.file, submenu: [{ role: 'quit', label: t.quit }] },
+      editMenu,
+      viewMenu,
       {
-        label: zh ? '帮助' : 'Help',
-        submenu: [checkItem, { type: 'separator' as const }, { role: 'about' as const }],
+        label: t.help,
+        submenu: [checkItem, { type: 'separator' }, { role: 'about', label: t.about }],
       },
     ]),
   )
