@@ -21,6 +21,9 @@ allowBuilds:
 # Pinning name@version entries here instead breaks on every upstream bump:
 # the sync script rewrites package.json/lockfile but not this list, and the
 # stale pins let fresh upstream releases fail CI (rc.6 pins vs rc.7 packages).
-# Everything outside the scope keeps the default protection.
+# Everything outside the scope keeps the default protection — except
+# dshmarket: sync-upstream.mjs follows its npm latest on every run, so a
+# freshly published market release must install on the same day too.
 minimumReleaseAgeExclude:
   - '@deepseek-ai/*'
+  - dshmarket

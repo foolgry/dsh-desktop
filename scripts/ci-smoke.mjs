@@ -1,9 +1,17 @@
 #!/usr/bin/env node
 /**
  * CI smoke test: boot `dsh web` straight from the installed dependency tree
- * and require three consecutive HTTP 200s — the same readiness rule the
- * desktop shell applies. Catches a pinned upstream whose web entry no longer
- * boots (bad publish, missing peer-only dep) before installers ship.
+ * and verify it serves the UI. Catches a pinned upstream whose web entry no
+ * longer boots (bad publish, missing peer-only dep) before installers ship.
+ *
+ * Two probes:
+ * 1. readiness — three consecutive HTTP answers of any status, the same
+ *    crash-window rule the desktop shell applies (binds the port before the
+ *    plugin tree loads, then may die). Any status counts: 0.1.2-alpha.2 put
+ *    the UI behind a token login, so anonymous probes now get 401 forever —
+ *    requiring a specific status couples the smoke test to one auth design.
+ * 2. authenticated UI — exchange the stdout token for a session cookie and
+ *    require a final 200, proving a user can actually open the app.
  */
 import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
@@ -22,7 +30,18 @@ const child = spawn(process.execPath, [bin, 'web', '--no-open', '--port', String
   env: { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
-child.stdout.on('data', (chunk) => process.stdout.write(chunk))
+// Chunks can split the `?token=` line, so matches accumulate across chunks.
+let stdoutTail = ''
+let token
+child.stdout.on('data', (chunk) => {
+  process.stdout.write(chunk)
+  stdoutTail += chunk.toString()
+  if (token === undefined) {
+    const match = stdoutTail.match(/[?&]token=([A-Za-z0-9._-]+)/)
+    if (match) token = match[1]
+  }
+  stdoutTail = stdoutTail.slice(-512)
+})
 child.stderr.on('data', (chunk) => process.stderr.write(chunk))
 
 async function ready() {
@@ -34,7 +53,8 @@ async function ready() {
     }
     try {
       const res = await fetch(`http://127.0.0.1:${PORT}/`)
-      stableAnswers = res.ok ? stableAnswers + 1 : 0
+      // Any answer proves the HTTP stack is up; see the file comment.
+      stableAnswers++
       if (stableAnswers >= 3) return
     } catch {
       stableAnswers = 0
@@ -44,9 +64,33 @@ async function ready() {
   throw new Error(`dsh did not answer on port ${PORT} within ${READY_TIMEOUT_MS / 1000}s`)
 }
 
+/**
+ * Follow dsh's token login by hand (undici keeps no cookie jar): GET the
+ * token URL without following the 303, carry the issued session cookie to
+ * `/`, and require the UI to answer 200.
+ */
+async function authenticatedUi() {
+  if (token === undefined) {
+    throw new Error('no ?token= in `dsh web` output — the UI would be unreachable')
+  }
+  const exchange = await fetch(`http://127.0.0.1:${PORT}/?token=${token}`, { redirect: 'manual' })
+  const cookies = exchange.headers
+    .getSetCookie()
+    .map((cookie) => cookie.split(';')[0])
+    .join('; ')
+  const ui = await fetch(`http://127.0.0.1:${PORT}/`, {
+    ...(cookies ? { headers: { cookie: cookies } } : {}),
+  })
+  if (!ui.ok) {
+    throw new Error(`authenticated UI probe failed: token exchange ${exchange.status}, follow-up ${ui.status}`)
+  }
+}
+
 try {
   await ready()
-  console.log(`smoke: dsh web ready on 127.0.0.1:${PORT}`)
+  console.log(`smoke: dsh web answering on 127.0.0.1:${PORT}`)
+  await authenticatedUi()
+  console.log(`smoke: authenticated UI answered 200 on 127.0.0.1:${PORT}`)
 } catch (error) {
   console.error(`smoke: ${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1

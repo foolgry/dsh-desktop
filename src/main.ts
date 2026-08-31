@@ -350,6 +350,30 @@ function toolingPathPrefix(): string {
 }
 
 /**
+ * Auth token parsed from the child's stdout (`dsh web: http://…/?token=…`).
+ * The web UI sits behind a token login: the token URL 303s to `/` and sets a
+ * session cookie, after which the app answers 200 — anonymous requests to `/`
+ * get 401 for as long as the server runs.
+ */
+let serverToken: string | undefined
+
+/**
+ * Extract the `?token=` value from a chunk of dsh stdout. Chunks can split the
+ * URL line, so the accumulator is fed back in on the next call.
+ * @returns the token once seen, else the accumulator to pass in next time
+ */
+function scanForToken(chunk: Buffer, seen: string): string {
+  const text = seen + chunk.toString()
+  const match = text.match(/[?&]token=([A-Za-z0-9._-]+)/)
+  if (match) {
+    serverToken = match[1]
+    return ''
+  }
+  // Bound the accumulator: only the tail can still be part of a split URL.
+  return text.slice(-512)
+}
+
+/**
  * Spawn `dsh web --port <port>` under Electron's embedded Node
  * (`ELECTRON_RUN_AS_NODE`), so end users need no system Node. Output is
  * appended to the userData log.
@@ -387,7 +411,11 @@ function startDsh(port: number): ChildProcess {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  child.stdout?.on('data', (chunk: Buffer) => appendFileSync(log, chunk))
+  let tokenScan = ''
+  child.stdout?.on('data', (chunk: Buffer) => {
+    appendFileSync(log, chunk)
+    tokenScan = scanForToken(chunk, tokenScan)
+  })
   child.stderr?.on('data', (chunk: Buffer) => appendFileSync(log, chunk))
   child.on('exit', (code, signal) =>
     appendFileSync(log, `\n=== dsh web exited (code ${code}, signal ${signal}) at ${new Date().toISOString()} ===\n`),
@@ -396,10 +424,14 @@ function startDsh(port: number): ChildProcess {
 }
 
 /**
- * Poll the server until it answers HTTP or the child dies. Readiness requires
- * three consecutive OK answers: `dsh web` binds its port before the plugin
- * tree finishes loading, so a plugin crash lets the server answer for a
- * brief window (~50ms) and then exit — a single OK is not proof of life.
+ * Poll the server until it answers HTTP or the child dies. Any HTTP status
+ * counts as ready — 200, 3xx, 401: the root route has historically been plain
+ * 200, but 0.1.2-alpha.2 put the UI behind a token login so anonymous probes
+ * now get 401, and a status requirement tied to one auth design would break
+ * on the next change. A bare answer is proof the HTTP stack is up; the crash
+ * window (binds the port before the plugin tree loads, answers briefly, then
+ * exits) is covered by the child-exit check plus three consecutive answers,
+ * not by the status code.
  * @param port - port the server was asked to bind
  * @param child - the dsh child, watched for early exit
  */
@@ -411,13 +443,9 @@ async function waitReady(port: number, child: ChildProcess): Promise<void> {
       throw new Error(`dsh exited with code ${child.exitCode} before becoming ready`)
     }
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/`)
-      if (res.ok) {
-        stableAnswers++
-        if (stableAnswers >= 3) return
-      } else {
-        stableAnswers = 0
-      }
+      await fetch(`http://127.0.0.1:${port}/`)
+      stableAnswers++
+      if (stableAnswers >= 3) return
     } catch {
       // connection refused while the server is still booting; keep polling
       stableAnswers = 0
@@ -497,8 +525,11 @@ function saveWindowState(win: BrowserWindow): void {
 /**
  * Create the single application window pointed at the local server.
  * @param port - port the server bound
+ * @param token - auth token from the child's stdout, appended so the token
+ * login (303 + session cookie) resolves before the UI renders; without it the
+ * window shows the 401 body on token-gated builds
  */
-function createWindow(port: number): BrowserWindow {
+function createWindow(port: number, token?: string): BrowserWindow {
   const saved = loadWindowState()
   const win = new BrowserWindow({
     width: saved?.width ?? 1280,
@@ -545,18 +576,17 @@ function createWindow(port: number): BrowserWindow {
       void shell.openExternal(url)
     }
   })
-  void win.loadURL(`http://127.0.0.1:${port}/`)
+  void win.loadURL(token ? `http://127.0.0.1:${port}/?token=${token}` : `http://127.0.0.1:${port}/`)
   return win
 }
 
 /**
  * Show the main window again (tray click, dock click, second instance).
  * Recreates it if it was somehow destroyed.
- * @param port - port the server bound
  */
-function showWindow(port: number): void {
+function showWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    mainWindow = createWindow(port)
+    mainWindow = createWindow(serverPort, serverToken)
     return
   }
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -612,9 +642,8 @@ function destroySplash(): void {
  * Create the system-tray icon with a show/quit menu. The tray owns the app
  * lifecycle once the window is hidden: left-click restores the window,
  * "Quit" is the only path that tears down the dsh child.
- * @param port - port the server bound
  */
-function createTray(port: number): void {
+function createTray(): void {
   // Declare the 36px PNG as a @2x representation so its logical size is
   // 18pt — status-item images are laid out in points, and a 1x image would
   // be clipped to the menu-bar height and look oversized.
@@ -638,7 +667,7 @@ function createTray(port: number): void {
   const recovery = loadRecoveryActions(safeModeStateFile()).length > 0
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: labels.show, click: () => showWindow(port) },
+      { label: labels.show, click: () => showWindow() },
       { label: labels.update, click: () => void manualUpdateCheck() },
       // Troubleshooting entries: the log is the first place to look when the
       // UI misbehaves, and the data dir holds profiles/sessions/plugins.
@@ -660,7 +689,7 @@ function createTray(port: number): void {
       },
     ]),
   )
-  tray.on('click', () => showWindow(port))
+  tray.on('click', () => showWindow())
 }
 
 /** Homebrew cask token for installs that came from the community tap. */
@@ -1160,8 +1189,8 @@ async function boot(): Promise<void> {
     try {
       await waitReady(port, dshChild)
       destroySplash()
-      mainWindow = createWindow(port)
-      createTray(port)
+      mainWindow = createWindow(port, serverToken)
+      createTray()
       booted = true
       if (attempt > 1) appendFileSync(logFile(), `\n=== boot succeeded after ${attempt - 1} failed attempt(s) ===\n`)
       return
@@ -1225,7 +1254,7 @@ if (!gotLock) {
   // by `booted`: macOS can fire activate during launch, and creating the
   // window then would point it at a port the server hasn't bound yet.
   app.on('activate', () => {
-    if (booted && serverPort && !mainWindow?.isVisible()) showWindow(serverPort)
+    if (booted && serverPort && !mainWindow?.isVisible()) showWindow()
   })
   app.on('will-quit', () => {
     tray?.destroy()

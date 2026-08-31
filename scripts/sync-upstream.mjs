@@ -39,6 +39,23 @@ const UPSTREAM = '@deepseek-ai/dsh'
 const SCOPE = '@deepseek-ai'
 
 /**
+ * Preinstalled companion packages that track their own npm `latest` on every
+ * sync, independent of the upstream version scheme. `dshmarket` is pinned as
+ * a preset plugin, but its release line (1.x) moves separately from dsh
+ * (0.1.x) — and when dsh breaks an API the market imports, only a fresh
+ * market release compiles again (dsh 0.1.2-alpha.1 deleted the
+ * `installSettingsSection` export and market 1.10.x made the whole host exit
+ * 1 at boot). Following it here keeps the preset from going stale between
+ * upstream releases.
+ */
+const COMPANION_PACKAGES = ['dshmarket']
+
+/** Latest published version of one companion package (its `latest` tag). */
+function companionLatest(name) {
+  return execFileSync('npm', ['view', name, 'version'], { encoding: 'utf8' }).trim()
+}
+
+/**
  * Latest published upstream version, straight from the npm registry.
  *
  * Reads ALL dist-tags and takes the highest semver among them: upstream
@@ -110,9 +127,11 @@ function nextVersion(current, upstream) {
  * packaging. Returning them lets the caller pin each one explicitly.
  *
  * @param {string} upstreamVersion - version to pin dsh-* peers to
+ * @param {Record<string, string>} deps - current package.json `dependencies`,
+ *   read to preserve exact (non-caret) pins
  * @returns {Record<string, string>} package name -> semver range
  */
-function detectPeerOnlyRuntimeDeps(upstreamVersion) {
+function detectPeerOnlyRuntimeDeps(upstreamVersion, deps) {
   const scopeDir = join(ROOT, 'node_modules', SCOPE)
   let names = []
   try {
@@ -147,9 +166,15 @@ function detectPeerOnlyRuntimeDeps(upstreamVersion) {
     const pkgJson = metas.get(fullName)
     if (!pkgJson) continue // referenced but not installed — cannot pin
     // dsh-* peers track the upstream release; other peers (e.g. cordis-*)
-    // keep their own installed version under a ^ range.
-    const version = fullName.startsWith(`${SCOPE}/dsh`) ? upstreamVersion : pkgJson.version
-    result[fullName] = `^${version}`
+    // keep their own installed version under a ^ range. A range that pnpm
+    // failed to resolve gets pinned exactly (no ^): the caret expansion of a
+    // prerelease pin like ^0.1.2-alpha.2 drops the prerelease lower bound, so
+    // when a companion package's stale peer range forces a re-resolve, the
+    // registry lookup hits "no matching version" for the unreleased stable
+    // (dsh-settings during 0.1.2-alpha, via dshmarket's peer).
+    const base = fullName.startsWith(`${SCOPE}/dsh`) ? upstreamVersion : pkgJson.version
+    const exact = deps[fullName] !== undefined && !deps[fullName].startsWith('^')
+    result[fullName] = exact ? base : `^${base}`
   }
   return result
 }
@@ -163,7 +188,7 @@ function detectPeerOnlyRuntimeDeps(upstreamVersion) {
  * @param {string} upstreamVersion - version to pin dsh-* peers to
  */
 function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
-  const peerOnly = detectPeerOnlyRuntimeDeps(upstreamVersion)
+  const peerOnly = detectPeerOnlyRuntimeDeps(upstreamVersion, deps)
   const added = []
   const updated = []
   for (const [name, range] of Object.entries(peerOnly)) {
@@ -184,7 +209,25 @@ function main() {
   const latest = upstreamLatest()
   const pinned = pkg.dependencies[UPSTREAM]
   const upstreamChanged = pinned !== latest
-  const changed = force || upstreamChanged
+
+  // Companion packages move on their own; a newer release needs a rebuild
+  // even when the upstream dependency itself did not budge. The stored range
+  // is a caret, so membership (not string equality) decides whether the npm
+  // latest is already covered.
+  const companionUpdates = []
+  for (const name of COMPANION_PACKAGES) {
+    const range = pkg.dependencies[name]
+    if (range === undefined) continue
+    const latestCompanion = companionLatest(name)
+    if (!semver.valid(latestCompanion)) {
+      throw new Error(`companion ${name}: npm returned invalid version ${latestCompanion}`)
+    }
+    if (!semver.satisfies(latestCompanion, range)) {
+      companionUpdates.push(`${name}: ${range} -> ^${latestCompanion}`)
+      pkg.dependencies[name] = `^${latestCompanion}`
+    }
+  }
+  const changed = force || upstreamChanged || companionUpdates.length > 0
 
   if (!changed) {
     console.log(`upstream unchanged at ${latest}; nothing to do`)
@@ -199,6 +242,7 @@ function main() {
     syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
     writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
     console.log(`upstream ${pinned} -> ${latest}; desktop version -> ${version}`)
+    for (const update of companionUpdates) console.log(`companion updated: ${update}`)
   }
 
   // `changed` = a build is wanted (upstream moved, or --force from a
