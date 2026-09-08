@@ -112,5 +112,5 @@ dist-installer/             # electron-builder 输出（gitignore）
 
 ## 进一步阅读
 
-- [README.md](README.md)（中文，默认）/ [README.en.md](README.en.md) — 面向用户的说明（安装、使用、工作原理）；微信群二维码在 `assets/wechat-group.jpg`（7 天过期，用户反馈失效时需重新替换）
+- [README.md](README.md)（中文，默认）/ [README.en.md](README.en.md) — 面向用户的说明（安装、使用、工作原理）；微信群二维码在 `assets/`（7 天过期，用户反馈失效时需重新替换）。**文件名必须带更换日期**（如 `wechat-group-20260908.jpg`）——GitHub 的 camo 图片代理按 URL 缓存，固定文件名换图后页面上会一直是旧码
 - 上游 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — dsh 本体的业务逻辑与配置

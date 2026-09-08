@@ -83,7 +83,7 @@ brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desk
 
 使用上有问题、想提建议，欢迎扫码进群交流：
 
-<img src="assets/wechat-group.jpg" alt="dsh desktop 微信交流群二维码" width="260" />
+<img src="assets/wechat-group-20260908.jpg" alt="dsh desktop 微信交流群二维码" width="260" />
 
 > 微信群二维码 7 天内有效。如果扫码提示已过期，请到 [Issues](https://github.com/foolgry/dsh-desktop/issues) 留言，我们会更新二维码。
 
