@@ -2,7 +2,7 @@
   "name": "dsh-desktop",
   "productName": "DSH Desktop",
   "description": "Desktop shell for DeepSeek Harness: downloads as an installer, runs the dsh web UI with Electron's embedded Node — no system Node or npm required.",
-  "version": "0.1.3-alpha.2.202609080607",
+  "version": "0.1.3-alpha.2.202609080708",
   "private": true,
   "author": "foolgry",
   "license": "MIT",
