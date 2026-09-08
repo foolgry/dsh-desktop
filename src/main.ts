@@ -386,20 +386,21 @@ function startDsh(port: number): ChildProcess {
   // --expose-internals is required by cordis-plugin-hmr's HMR service, which
   // ships in the base profile and reads Node internals unavailable by default.
   const args = ['--expose-internals', dshBin(), 'web']
-  // The shell loads the UI in its own window; dsh's default behavior of
-  // opening the system browser on top of that is a redundant tab per launch.
-  args.push('--no-open')
   // win32: the native folder dialog's koffi.node crashes under Electron's ABI
-  // (issue #1), so overlay the pure-JS browse picker instead. --patch must
-  // come BEFORE --port: the web subcommand uses enablePositionalOptions() with
-  // a greedy [args...], so once the unknown option --port starts being
-  // collected as a positional, any later --patch is no longer parsed
-  // (issue #2).
+  // (issue #1), so overlay the pure-JS browse picker instead. Every option the
+  // web subcommand itself declares must come BEFORE the first pass-through
+  // option: it uses enablePositionalOptions() with a greedy [args...], so once
+  // an unknown option (--no-open, --port) starts being collected, later known
+  // options are forwarded verbatim to the inner web-app parser, which rejects
+  // --patch with "unknown option" (issue #2, and its --no-open repeat).
   const pickerPatch = ensurePickerFallbackPatch()
   if (pickerPatch) {
     args.push('--patch', pickerPatch)
     appendFileSync(log, `=== win32: using browse directory picker (native koffi crashes under Electron ABI; issue #1) ===\n`)
   }
+  // The shell loads the UI in its own window; dsh's default behavior of
+  // opening the system browser on top of that is a redundant tab per launch.
+  args.push('--no-open')
   args.push('--port', String(port))
   const child = spawn(process.execPath, args, {
     env: {

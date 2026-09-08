@@ -13,6 +13,7 @@ allowBuilds:
   '@pnpm/exe': true
   electron-winstaller: true
   esbuild: true
+  fs-ext: true
   koffi: true
   node-pty: true
   protobufjs: false

@@ -4,6 +4,13 @@
  * and verify it serves the UI. Catches a pinned upstream whose web entry no
  * longer boots (bad publish, missing peer-only dep) before installers ship.
  *
+ * The child runs on Electron's embedded Node (ELECTRON_RUN_AS_NODE) — the
+ * exact runtime the desktop shell uses. Native modules are rebuilt for
+ * Electron's ABI before this step, so booting under the setup-node binary
+ * would exercise a different NODE_MODULE_VERSION than what ships, and a
+ * module that only loads under plain Node would pass here and crash for
+ * users (fs-ext in 0.1.3-alpha.2 did exactly that).
+ *
  * Two probes:
  * 1. readiness — three consecutive HTTP answers of any status, the same
  *    crash-window rule the desktop shell applies (binds the port before the
@@ -24,10 +31,20 @@ const READY_TIMEOUT_MS = 90_000
 
 const require = createRequire(import.meta.url)
 const bin = require.resolve('@deepseek-ai/dsh/lib/bin.js')
+// `electron` the package exports the path of the downloaded binary when
+// required from plain Node — not Electron's main-process API.
+const electronBin = require('electron')
 const home = mkdtempSync(join(tmpdir(), 'dsh-smoke-'))
 
-const child = spawn(process.execPath, [bin, 'web', '--no-open', '--port', String(PORT)], {
-  env: { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' },
+// --expose-internals mirrors the shell: cordis-plugin-hmr's HMR service reads
+// Node internals that are hidden by default.
+const child = spawn(electronBin, ['--expose-internals', bin, 'web', '--no-open', '--port', String(PORT)], {
+  env: {
+    ...process.env,
+    ELECTRON_RUN_AS_NODE: '1',
+    DSH_HOME: home,
+    DSH_TELEMETRY_DISABLED: '1',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 // Chunks can split the `?token=` line, so matches accumulate across chunks.

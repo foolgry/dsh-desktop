@@ -121,6 +121,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # fs-ext (session-lock flock, new in 0.1.3-alpha.2) is a nan native
+      # module: the install above compiles it against setup-node's ABI, while
+      # the shell runs dsh on Electron's embedded Node — a different
+      # NODE_MODULE_VERSION, so `dsh web` would die on its first session
+      # import. Rebuild it for Electron before the smoke test exercises the
+      # real runtime and electron-builder ships the tree.
+      - run: pnpm exec electron-rebuild -f -o fs-ext
+
       - run: pnpm run build
 
       - name: Smoke-test the pinned upstream (boot dsh web, probe readiness)
