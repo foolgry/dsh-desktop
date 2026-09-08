@@ -1,0 +1,18 @@
+diff --git a/out/node-module-collector/pnpmNodeModulesCollector.js b/out/node-module-collector/pnpmNodeModulesCollector.js
+index 8853912e013d3769f3e763d06720a94091a7ffaa..87345d861dae7a21ba1666df91972bea00b94b3b 100644
+--- a/out/node-module-collector/pnpmNodeModulesCollector.js
++++ b/out/node-module-collector/pnpmNodeModulesCollector.js
+@@ -105,7 +105,12 @@ class PnpmNodeModulesCollector extends nodeModulesCollector_1.NodeModulesCollect
+             }
+             else {
+                 this.cache.logSummary[moduleManager_1.LogMessageByKey.PKG_DUPLICATE_REF_UNRESOLVED].push(dependencyId);
+-                return;
++                // dsh-desktop patch: pnpm 11 marks a node deduped on its FIRST
++                // occurrence, so it never lands in allDependencies and the
++                // early return below dropped the package (and its whole
++                // subtree) from the production graph — hoisted installs then
++                // shipped without it (upstream issue #10000). The node itself
++                // carries path/version/dependencies, so keep processing it.
+             }
+         }
+         const packageName = tree.name || tree.from;

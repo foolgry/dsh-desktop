@@ -142,6 +142,13 @@ jobs:
           # installers show the platform's unknown-developer warning.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
+      # Boot from the packaged app.asar.unpacked, not the source tree: the
+      # dependency collector can drop packages from the shipped tree that the
+      # source tree always has installed (pnpm 11 deduped output dropped 17
+      # first-party packages in 0.1.3-alpha.2 — app-builder-lib #10000).
+      - name: Smoke-test the packaged installer tree
+        run: node scripts/ci-smoke.mjs --packaged
+
       - uses: actions/upload-artifact@v7
         with:
           name: installer-${{ matrix.os }}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * CI smoke test: boot `dsh web` straight from the installed dependency tree
+ * CI smoke test: boot `dsh web` straight from an installed dependency tree
  * and verify it serves the UI. Catches a pinned upstream whose web entry no
  * longer boots (bad publish, missing peer-only dep) before installers ship.
  *
@@ -10,6 +10,14 @@
  * would exercise a different NODE_MODULE_VERSION than what ships, and a
  * module that only loads under plain Node would pass here and crash for
  * users (fs-ext in 0.1.3-alpha.2 did exactly that).
+ *
+ * Modes:
+ * - default: boot from the source tree's node_modules — catches bad upstream
+ *   publishes before minutes of packaging are spent.
+ * - `--packaged`: boot from the electron-builder output's app.asar.unpacked —
+ *   catches what the source tree cannot: the dependency collector dropping
+ *   packages (pnpm 11 deduped output, app-builder-lib #10000) only breaks
+ *   the *shipped* tree; the source tree always has every package installed.
  *
  * Two probes:
  * 1. readiness — three consecutive HTTP answers of any status, the same
@@ -21,7 +29,7 @@
  *    require a final 200, proving a user can actually open the app.
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -30,10 +38,28 @@ const PORT = 3999
 const READY_TIMEOUT_MS = 90_000
 
 const require = createRequire(import.meta.url)
-const bin = require.resolve('@deepseek-ai/dsh/lib/bin.js')
 // `electron` the package exports the path of the downloaded binary when
 // required from plain Node — not Electron's main-process API.
 const electronBin = require('electron')
+
+function resolveBootBin() {
+  if (!process.argv.includes('--packaged')) {
+    return require.resolve('@deepseek-ai/dsh/lib/bin.js')
+  }
+  // electron-builder output layout: unpacked dependencies sit next to the
+  // asar archive. Directory names are electron-builder defaults for our
+  // targets (mac: arm64 zip/dmg, win: nsis).
+  const unpacked = process.platform === 'win32'
+    ? join('dist-installer', 'win-unpacked', 'resources', 'app.asar.unpacked')
+    : join('dist-installer', 'mac-arm64', 'DSH Desktop.app', 'Contents', 'Resources', 'app.asar.unpacked')
+  const bin = join(unpacked, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  if (!existsSync(bin)) {
+    throw new Error(`packaged dsh entry not found at ${bin} — did electron-builder run first?`)
+  }
+  return bin
+}
+
+const bin = resolveBootBin()
 const home = mkdtempSync(join(tmpdir(), 'dsh-smoke-'))
 
 // --expose-internals mirrors the shell: cordis-plugin-hmr's HMR service reads
