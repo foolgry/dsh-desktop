@@ -1,8 +1,10 @@
+
+
 # DSH Desktop
 
 [English](README.en.md) | 中文
 
-DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 Node.js、无需使用 npm、无需打开终端。安装后打开应用，在界面里填入你的 DeepSeek API Key，就能开始让 AI 帮你跑任务（读写文件、执行命令、写代码、自动化操作等）。
+DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 Node.js、无需使用 npm、无需打开终端。安装后打开应用，在界面里填入你的 DeepSeek API Key，就能开始让 AI 帮你跑任务（读写文件、执行命令、写代码、自动化操作等。
 
 如果你在找「DeepSeek 桌面版」「DeepSeek 客户端下载」「DeepSeek Agent 电脑版」，这就是为你准备的。支持 macOS（Apple Silicon）和 Windows，安装包见下方 Releases。
 
@@ -77,7 +79,7 @@ brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desk
 1. 检查 npm 上 `@deepseek-ai/dsh` 是否有新版本；没有则跳过
 2. 有新版本就更新依赖、打 tag、构建 macOS（dmg + zip）和 Windows（nsis）安装包，发布到 Releases
 
-桌面版版本号跟随上游：`0.1.0-rc.6.6` 表示"基于上游 `0.1.0-rc.6` 的第 6 个桌面构建"。
+桌面版版本号跟随上游：如 `0.1.0-rc.6.202508151030` 表示“基于上游 `0.1.0-rc.6` 在 UTC `202508151030` 生成的桌面构建”。
 
 ## 微信交流群
 
