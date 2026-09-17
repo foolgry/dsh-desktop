@@ -1,10 +1,16 @@
 /**
- * Sync-upstream entry for CI and `just sync`: polls npm for the latest
- * `@deepseek-ai/dsh`, and when it moved (or --force is passed) bumps the
- * dependency and computes the next desktop version. CI also passes --force
- * to rebuild the SAME upstream version when the repo itself changed since
- * the last release tag, or when a tag was left without a release by a
- * failed build.
+ * Sync-upstream entry for CI and `just sync`: polls npm for the newest
+ * `@deepseek-ai/dsh` the registry can actually resolve, and when it moved (or
+ * --force is passed) bumps the dependency and computes the next desktop
+ * version. CI also passes --force to rebuild the SAME upstream version when
+ * the repo itself changed since the last release tag, or when a tag was left
+ * without a release by a failed build.
+ *
+ * "Newest resolvable": candidates are tried newest-first and skipped while
+ * their first-party dependency ranges have no published match — upstream
+ * ships the monorepo as one batch and sometimes lands the main package
+ * before its siblings, and adopting such a half-published release used to
+ * wedge the lockfile refresh (and thus every scheduled run) for days.
  *
  * Desktop version scheme, designed to stay valid semver and strictly
  * increasing under electron-updater:
@@ -27,11 +33,14 @@
  * @module dsh-desktop/scripts/sync-upstream
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
 import { readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, dirname, resolve } from 'node:path'
 import semver from 'semver'
+
+const execFileP = promisify(execFile)
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PKG_PATH = join(ROOT, 'package.json')
@@ -56,22 +65,105 @@ function companionLatest(name) {
 }
 
 /**
- * Latest published upstream version, straight from the npm registry.
+ * Published upstream versions worth considering, newest first.
  *
- * Reads ALL dist-tags and takes the highest semver among them: upstream
- * publishes each rc to `next` first and only moves it to `latest` later (or
- * never), so `npm view version` — which reads `latest` only — misses fresh
- * rc releases for days (rc.7 and rc.8 both went undetected this way).
+ * The full version list (a superset of dist-tags) instead of `npm view
+ * version` — which reads `latest` only — because upstream publishes each rc
+ * to `next` first and only moves it to `latest` later (or never), so rc.7
+ * and rc.8 both went undetected that way.
  */
-function upstreamLatest() {
-  const tags = JSON.parse(
-    execFileSync('npm', ['view', UPSTREAM, 'dist-tags', '--json'], { encoding: 'utf8' }),
-  )
-  const best = Object.values(tags)
-    .filter((v) => semver.valid(v))
-    .sort(semver.rcompare)[0]
-  if (!best) throw new Error(`no valid version in dist-tags of ${UPSTREAM}: ${JSON.stringify(tags)}`)
-  return best
+async function upstreamCandidates() {
+  const { stdout } = await execFileP('npm', ['view', UPSTREAM, 'versions', '--json'], {
+    encoding: 'utf8',
+  })
+  const versions = JSON.parse(stdout)
+  const valid = versions.filter((v) => semver.valid(v)).sort(semver.rcompare)
+  if (!valid.length) throw new Error(`no valid published versions of ${UPSTREAM}`)
+  return valid
+}
+
+/** npm registry manifest of a single upstream version. */
+async function upstreamMeta(version) {
+  const { stdout } = await execFileP('npm', ['view', `${UPSTREAM}@${version}`, '--json'], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  return JSON.parse(stdout)
+}
+
+/** All published versions of one package, cached per run; empty if unlisted. */
+const versionsCache = new Map()
+async function publishedVersions(name) {
+  if (!versionsCache.has(name)) {
+    versionsCache.set(
+      name,
+      await execFileP('npm', ['view', name, 'versions', '--json'], { encoding: 'utf8' })
+        .then(({ stdout }) => JSON.parse(stdout).filter((v) => semver.valid(v)))
+        .catch(() => []), // unlisted or unreachable: nothing resolvable there
+    )
+  }
+  return versionsCache.get(name)
+}
+
+/** Run `fn` over `items` with at most `limit` in flight. */
+async function mapPool(items, limit, fn) {
+  const results = new Array(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i], i)
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
+/**
+ * Whether pnpm can resolve `version` from the registry today: every
+ * first-party range it pulls in — plus the peer-only pins this bump would
+ * write into package.json — must match at least one published version.
+ *
+ * Upstream ships the dsh monorepo as one batch and occasionally lands the
+ * main package before its siblings (0.1.6-alpha.2 went out while
+ * dsh-code-runtime had no 0.1.6-* release), which wedged every scheduled run
+ * on the lockfile refresh until the stragglers appeared. Third-party ranges
+ * are not checked: independent packages don't move in lockstep with dsh.
+ */
+async function installable(version, depsAfterBump) {
+  let meta
+  try {
+    meta = await upstreamMeta(version)
+  } catch (err) {
+    console.log(`upstream ${version}: manifest unavailable (${err.message.split('\n')[0]})`)
+    return false
+  }
+  // Every (name, range) pair must resolve, not one range per name: the root
+  // package.json may pin a different (older) range than the upstream manifest
+  // declares for the same package, and pnpm has to satisfy both.
+  const pairs = new Map()
+  const add = (name, range) => {
+    if (typeof name === 'string' && name.startsWith(`${SCOPE}/`) && typeof range === 'string') {
+      pairs.set(`${name} ${range}`, [name, range])
+    }
+  }
+  for (const [name, range] of Object.entries(meta.dependencies ?? {})) add(name, range)
+  for (const [name, range] of Object.entries(meta.peerDependencies ?? {})) add(name, range)
+  for (const [name, range] of Object.entries(depsAfterBump)) add(name, range)
+
+  const missing = []
+  await mapPool([...pairs.values()], 8, async ([name, range]) => {
+    const versions = await publishedVersions(name)
+    if (!versions.some((v) => semver.satisfies(v, range))) missing.push(`${name}@${range}`)
+  })
+  if (missing.length) {
+    console.log(
+      `upstream ${version}: ${missing.length} first-party dependency range(s) unresolvable ` +
+        `(e.g. ${missing.slice(0, 3).join(', ')}); not adoptable yet`,
+    )
+    return false
+  }
+  return true
 }
 
 /**
@@ -182,12 +274,14 @@ function detectPeerOnlyRuntimeDeps(upstreamVersion, deps) {
 /**
  * Merge detected peer-only runtime deps into `deps`, adding new ones and
  * bumping versions of existing entries. Entries are never removed: a peer that
- * later becomes a real dependency elsewhere stays pinned (harmless — the package
- * is still installed) rather than risk a stale reference after a rename.
+ * later becomes a real dependency elsewhere stays pinned (harmless — the
+ * package is still installed) rather than risk a stale reference after a rename.
  * @param {Record<string, string>} deps - package.json `dependencies` to mutate
  * @param {string} upstreamVersion - version to pin dsh-* peers to
+ * @param {boolean} [log=true] - false for dry-run previews (a failing
+ *   candidate would otherwise print its planned pins before being rejected)
  */
-function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
+function syncPeerOnlyRuntimeDeps(deps, upstreamVersion, log = true) {
   const peerOnly = detectPeerOnlyRuntimeDeps(upstreamVersion, deps)
   const added = []
   const updated = []
@@ -199,15 +293,35 @@ function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
     }
     deps[name] = range
   }
+  if (!log) return
   if (added.length) console.log(`peer-only runtime deps added: ${added.join(', ')}`)
   if (updated.length) console.log(`peer-only runtime deps updated: ${updated.join('; ')}`)
 }
 
-function main() {
+async function main() {
   const force = process.argv.includes('--force')
   const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'))
-  const latest = upstreamLatest()
   const pinned = pkg.dependencies[UPSTREAM]
+  const pinnedVersion = semver.valid(pinned) ?? semver.minVersion(pinned)?.version
+  if (!pinnedVersion) throw new Error(`pinned ${UPSTREAM} range ${pinned} has no valid version`)
+
+  // Newest-to-oldest, adopt the first release the registry can actually
+  // resolve; never fall back below the version already pinned (that one is
+  // known-installable, so "no candidate" simply means staying put).
+  let latest = null
+  for (const candidate of await upstreamCandidates()) {
+    if (!semver.gt(candidate, pinnedVersion)) break
+    const preview = { ...pkg.dependencies }
+    syncPeerOnlyRuntimeDeps(preview, candidate, false)
+    if (await installable(candidate, preview)) {
+      latest = candidate
+      break
+    }
+  }
+  if (!latest) {
+    console.warn(`no installable ${UPSTREAM} release above ${pinnedVersion} yet; staying on it`)
+    latest = pinnedVersion
+  }
   const upstreamChanged = pinned !== latest
 
   // Companion packages move on their own; a newer release needs a rebuild
@@ -267,7 +381,7 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main()
+  await main()
 }
 
-export { nextVersion, buildStamp }
+export { nextVersion, buildStamp, installable, upstreamCandidates }

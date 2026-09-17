@@ -20,7 +20,7 @@
 | 任务运行 | **just**（`justfile`） | 所有命令优先走 just |
 | 打包 | electron-builder 26 | dmg+zip（mac）、nsis（win） |
 | 自动更新 | electron-updater | 每 4 小时检查 + 菜单/托盘「检查更新…」手动触发；Windows 后台下载后弹「重启更新」，macOS 未签名走 Homebrew（brew 安装时）或 Releases 页手动下载 |
-| 上游同步 | `scripts/sync-upstream.mjs` + GitHub Actions | 每天北京时间 09/13/17 点轮询 npm（读全部 dist-tags 取最大 semver，上游 rc 先发 `next` 后挪 `latest`）；上游或本仓库任一有更新都会出包 |
+| 上游同步 | `scripts/sync-upstream.mjs` + GitHub Actions | 每天北京时间 09/13/17 点轮询 npm（候选取全部已发布版本按 semver 降序，**先验证可安装性**——第一方依赖 range 在 npm 上有匹配版本才采纳，上游 monorepo 偶尔只发主包、子包未跟上（0.1.6-alpha.x），此时自动回退到可安装的最新版；上游 rc 先发 `next` 后挪 `latest`）；上游或本仓库任一有更新都会出包 |
 
 ## 常用命令
 
@@ -97,7 +97,7 @@ dist-installer/             # electron-builder 输出（gitignore）
 
 单 workflow 三阶段（刻意合并，避免 `GITHUB_TOKEN` 推 tag 触发第二个 workflow）：
 
-1. **sync**（ubuntu）：先判定是否需要出包——① 上游有新版本（读全部 dist-tags 取最大 semver；**不能只看 `latest`**，上游 rc 先发 `next`、稳定后才挪 `latest`，rc.7/rc.8 都因此漏检过）；② 最新 release tag 之后本仓库又有新 commit；③ 最新 tag 无对应 release（build 失败留下的孤儿 tag）；④ 手动 `force`。任一命中即给脚本传 `--force`，脚本统一 bump 桌面版本（同上游重建会得到新时间戳版本，天然递增）；若 `changed=true`，刷新 lockfile → commit（上游升级与纯重建的 message 不同，靠脚本的 `upstream_changed` 输出区分）+ tag `v<version>` → 推到 master。sync job 的 checkout 必须 `fetch-depth: 0` + `fetch-tags: true`，否则 tag 差异比较无从谈起。
+1. **sync**（ubuntu）：先判定是否需要出包——① 上游有新版本（候选取全部已发布版本按 semver 降序、逐个验证可安装性：主包依赖 + 本次升级将写入的 peer-only pin 里每个第一方 range 都要在 npm 上有匹配版本，否则跳过该候选回退下一个；**不能只看 `latest`**，上游 rc 先发 `next`、稳定后才挪 `latest`，rc.7/rc.8 都因此漏检过；也不能直接采纳半套发布——0.1.6-alpha.x 主包先落地而 dsh-code-runtime 未发，曾让 lockfile 刷新连环失败数天）；② 最新 release tag 之后本仓库又有新 commit；③ 最新 tag 无对应 release（build 失败留下的孤儿 tag）；④ 手动 `force`。任一命中即给脚本传 `--force`，脚本统一 bump 桌面版本（同上游重建会得到新时间戳版本，天然递增）；若 `changed=true`，刷新 lockfile → commit（上游升级与纯重建的 message 不同，靠脚本的 `upstream_changed` 输出区分）+ tag `v<version>` → 推到 master。sync job 的 checkout 必须 `fetch-depth: 0` + `fetch-tags: true`，否则 tag 差异比较无从谈起。
 2. **build**（macos-14 / windows-latest 并行）：checkout 对应 tag → `electron-builder --publish never` → 上传 artifact。
 3. **release**（ubuntu）：汇总双平台产物，`gh release create` 一次性发布（避免并行构建竞争同一 release）。
 
